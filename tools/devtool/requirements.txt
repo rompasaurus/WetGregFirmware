@@ -1,0 +1,6 @@
+# WetGreg DevTool — Python dependencies
+#
+# The GUI runs on the Python standard library (tkinter) alone. pyserial is only
+# needed for the Debug tab's serial monitor; without it everything else still
+# works. Install with:  pip install -r requirements.txt
+pyserial>=3.5

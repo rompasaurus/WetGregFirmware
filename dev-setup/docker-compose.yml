@@ -1,0 +1,33 @@
+services:
+  # ─────────────────────────────────────────────────────────────────────────
+  # build-dilder-hub-rtos — the ONLY build service in WetGregFirmware.
+  #
+  # The dilder-hub-rtos firmware is the FreeRTOS (SMP) variant targeting the
+  # Pico 2 W (RP2350) soldered onto the Dilder PCB, driving a WeAct 2.13" V4
+  # e-ink panel. It is self-contained: it keeps its OWN lib copy, so we do NOT
+  # mount a shared lib over it.
+  #
+  # It needs the FreeRTOS-Kernel submodule, which lives at the repository ROOT
+  # (one level above dev-setup) with its nested port submodules initialised
+  # (git submodule update --init --recursive). We mount it at /FreeRTOS-Kernel
+  # and point the build at it via FREERTOS_KERNEL_PATH.
+  #
+  # picowota (the Wi-Fi OTA bootloader) is mounted at /picowota so that an
+  # optional OTA build (-DPICOWOTA_OTA=ON) can find it at ../../picowota.
+  #
+  # Always build this variant with PICO_BOARD=pico2_w (RP2350). The devtool
+  # passes PICO_BOARD and DISPLAY_VARIANT via -e.
+  # ─────────────────────────────────────────────────────────────────────────
+  build-dilder-hub-rtos:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./dilder-hub-rtos:/project
+      - ../FreeRTOS-Kernel:/FreeRTOS-Kernel
+      - ../picowota:/picowota
+    working_dir: /project
+    environment:
+      - FREERTOS_KERNEL_PATH=/FreeRTOS-Kernel
+      - PICO_BOARD=pico2_w
+      - DISPLAY_VARIANT=V4

@@ -1,0 +1,35 @@
+# ─── Firmware build artifacts ───
+dev-setup/*/build/
+dev-setup/*/build-ota/
+picowota/build/
+*.o
+*.elf
+*.uf2
+*.bin
+*.hex
+*.dis
+*.map
+*.d
+.ninja_log
+.ninja_deps
+build.ninja
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# ─── Credentials & user config ───
+# Never commit real WiFi passwords — copy wifi_config.h to wifi_config.local.h
+dev-setup/*/wifi_config.local.h
+.config/wetgreg-devtool/
+
+# ─── Python ───
+__pycache__/
+*.pyc
+*.pyo
+
+# ─── IDE / editor ───
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
