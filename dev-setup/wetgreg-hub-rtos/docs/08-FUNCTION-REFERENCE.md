@@ -117,7 +117,7 @@ background task. Must run with the scheduler active. · *Blocking:* brief.
 Join a network, scan, and sync the clock over NTP. Network callbacks run in the cyw43 task;
 other tasks calling lwIP must hold the cyw43 lock. · *Context:* cyw43 task + UI triggers.
 
-### `dilder_bt_init()`, `dilder_bt_*()`, GATT handlers — `bt.c`
+### `wetgreg_bt_init()`, `wetgreg_bt_*()`, GATT handlers — `bt.c`
 The BLE peripheral: advertise, passkey-pair, and expose mood/steps to a phone. Runs on
 BTstack inside the cyw43 task. · *Context:* cyw43 task.
 

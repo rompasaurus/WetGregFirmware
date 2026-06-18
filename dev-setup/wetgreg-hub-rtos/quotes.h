@@ -1,5 +1,5 @@
-/* Auto-generated quote table for dilder-hub-rtos.
- * Originally produced by the Dilder DevTool quote generator; vendored
+/* Auto-generated quote table for wetgreg-hub-rtos.
+ * Originally produced by the WetGreg DevTool quote generator; vendored
  * here as a static header so the firmware builds standalone. Regenerate
  * only if the quote set changes. */
 #ifndef QUOTES_H
@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#define TAGLINE "~ DILDER HUB RTOS ~"
+#define TAGLINE "~ WETGREG HUB RTOS ~"
 #define QUOTE_COUNT 823
 
 typedef struct { const char *text; uint8_t mood; } Quote;

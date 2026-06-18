@@ -1,9 +1,9 @@
 services:
   # ─────────────────────────────────────────────────────────────────────────
-  # build-dilder-hub-rtos — the ONLY build service in WetGregFirmware.
+  # build-wetgreg-hub-rtos — the ONLY build service in WetGregFirmware.
   #
-  # The dilder-hub-rtos firmware is the FreeRTOS (SMP) variant targeting the
-  # Pico 2 W (RP2350) soldered onto the Dilder PCB, driving a WeAct 2.13" V4
+  # The wetgreg-hub-rtos firmware is the FreeRTOS (SMP) variant targeting the
+  # Pico 2 W (RP2350) soldered onto the WetGreg PCB, driving a WeAct 2.13" V4
   # e-ink panel. It is self-contained: it keeps its OWN lib copy, so we do NOT
   # mount a shared lib over it.
   #
@@ -18,12 +18,12 @@ services:
   # Always build this variant with PICO_BOARD=pico2_w (RP2350). The devtool
   # passes PICO_BOARD and DISPLAY_VARIANT via -e.
   # ─────────────────────────────────────────────────────────────────────────
-  build-dilder-hub-rtos:
+  build-wetgreg-hub-rtos:
     build:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ./dilder-hub-rtos:/project
+      - ./wetgreg-hub-rtos:/project
       - ../FreeRTOS-Kernel:/FreeRTOS-Kernel
       - ../picowota:/picowota
     working_dir: /project

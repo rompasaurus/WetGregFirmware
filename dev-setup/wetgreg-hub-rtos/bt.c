@@ -1,4 +1,4 @@
-/* Dilder Hub — BLE peripheral: advertise as "Dilder Hub", accept a connection
+/* WetGreg Hub — BLE peripheral: advertise as "WetGreg Hub", accept a connection
  * from a phone, pair/bond with a passkey shown on screen, and expose a small
  * custom GATT service (read live status + notify, write a command byte). */
 #include "bt.h"
@@ -6,7 +6,7 @@
 #include <string.h>
 #include "btstack.h"
 #include "pico/cyw43_arch.h"   /* cyw43_thread_enter/exit — serialise vs the BT run loop */
-#include "dilder.h"   /* generated from dilder.gatt by pico_btstack_make_gatt_header */
+#include "wetgreg.h"   /* generated from wetgreg.gatt by pico_btstack_make_gatt_header */
 
 /* Handle macros from the generated GATT header (custom 0xFFE0 service). */
 #define H_STATUS_VALUE  ATT_CHARACTERISTIC_0000FFE1_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE
@@ -33,22 +33,22 @@ static hci_con_handle_t g_con       = HCI_CON_HANDLE_INVALID;
 static bool            g_notify     = false;
 static btstack_context_callback_registration_t g_notify_cb;
 
-/* Advertising payload: discoverable flags + name + the Dilder social beacon
+/* Advertising payload: discoverable flags + name + the WetGreg social beacon
  * (manufacturer-specific AD). The id/target/flags bytes are patched at runtime,
  * so this is NOT const. Layout (byte offsets noted for the patch macros):
  *   [len][FLAGS][0x06]                          flags
- *   [len][NAME ]['Dilder Hub']                  complete local name
+ *   [len][NAME ]['WetGreg Hub']                  complete local name
  *   [0x0A][MFG ][compLo][compHi]['D']['L'][idLo][idHi][tgtLo][tgtHi][flags]
  * "company" 0xFFFF is the BLE "no company"/internal id — fine for a closed toy. */
-#define DILDER_COMPANY_LO 0xFF
-#define DILDER_COMPANY_HI 0xFF
-#define DILDER_HELLO_FLAG 0x01
+#define WETGREG_COMPANY_LO 0xFF
+#define WETGREG_COMPANY_HI 0xFF
+#define WETGREG_HELLO_FLAG 0x01
 static uint8_t adv_data[] = {
     0x02, BLUETOOTH_DATA_TYPE_FLAGS, 0x06,
     0x0B, BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME,
     'D', 'i', 'l', 'd', 'e', 'r', ' ', 'H', 'u', 'b',
     0x0A, BLUETOOTH_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA,
-    DILDER_COMPANY_LO, DILDER_COMPANY_HI, 'D', 'L',
+    WETGREG_COMPANY_LO, WETGREG_COMPANY_HI, 'D', 'L',
     0x00, 0x00,   /* our id      */
     0x00, 0x00,   /* hello target */
     0x00,         /* hello flags  */
@@ -63,7 +63,7 @@ static uint8_t adv_data[] = {
  * in the BT run-loop context. This avoids the cross-thread run-loop corruption
  * that previously wedged the stack after a couple of sends. */
 static uint16_t g_self_id   = 0;
-static volatile bool g_social = false;    /* desired: scan for Dilders */
+static volatile bool g_social = false;    /* desired: scan for WetGregs */
 static bool     g_scanning  = false;      /* actual scan state (run-loop owned) */
 
 /* App-set intent for the directed emote (latest-wins; older sends are thrown out). */
@@ -76,7 +76,7 @@ static btstack_timer_source_t g_social_timer;
 static bool g_social_timer_on = false;
 
 /* one-slot latch: written by the BT run loop (advertising-report parse),
- * read+cleared by the app via dilder_social_poll(). */
+ * read+cleared by the app via wetgreg_social_poll(). */
 static volatile uint16_t g_peer_id      = 0;
 static volatile bool     g_peer_hello   = false;
 static volatile uint8_t  g_peer_emote   = 0;
@@ -178,23 +178,23 @@ static void hci_handler(uint8_t type, uint16_t ch, uint8_t *packet, uint16_t siz
             if (!g_social) break;
             const uint8_t *data = gap_event_advertising_report_get_data(packet);
             uint8_t dlen = gap_event_advertising_report_get_data_length(packet);
-            uint16_t found_id = 0, tgt = 0; uint8_t flags = 0; bool is_dilder = false;
+            uint16_t found_id = 0, tgt = 0; uint8_t flags = 0; bool is_wetgreg = false;
             ad_context_t ctx;
             for (ad_iterator_init(&ctx, dlen, data); ad_iterator_has_more(&ctx); ad_iterator_next(&ctx)) {
                 if (ad_iterator_get_data_type(&ctx) != BLUETOOTH_DATA_TYPE_MANUFACTURER_SPECIFIC_DATA)
                     continue;
                 const uint8_t *d = ad_iterator_get_data(&ctx);
                 if (ad_iterator_get_data_len(&ctx) >= 9 &&
-                    d[0] == DILDER_COMPANY_LO && d[1] == DILDER_COMPANY_HI &&
+                    d[0] == WETGREG_COMPANY_LO && d[1] == WETGREG_COMPANY_HI &&
                     d[2] == 'D' && d[3] == 'L') {
                     found_id = (uint16_t)(d[4] | (d[5] << 8));
                     tgt      = (uint16_t)(d[6] | (d[7] << 8));
                     flags    = d[8];
-                    is_dilder = true;
+                    is_wetgreg = true;
                 }
                 break;
             }
-            if (!is_dilder || found_id == 0 || found_id == g_self_id) break;
+            if (!is_wetgreg || found_id == 0 || found_id == g_self_id) break;
             /* `flags` carries the emote code (0 = none); it's directed at us when
              * the target id matches ours. */
             bool hello = (flags != 0) && (tgt == g_self_id);
@@ -252,7 +252,7 @@ static void sm_handler(uint8_t type, uint16_t ch, uint8_t *packet, uint16_t size
     }
 }
 
-void dilder_bt_init(void) {
+void wetgreg_bt_init(void) {
     if (g_active) return;
 
     /* All BTstack calls below touch structures the BT run loop also walks on the
@@ -287,7 +287,7 @@ void dilder_bt_init(void) {
     cyw43_thread_exit();
 }
 
-void dilder_bt_stop(void) {
+void wetgreg_bt_stop(void) {
     if (!g_active) return;
 
     cyw43_thread_enter();
@@ -303,7 +303,7 @@ void dilder_bt_stop(void) {
     g_peer[0] = '\0';
 }
 
-void dilder_bt_set_status(const char *s) {
+void wetgreg_bt_set_status(const char *s) {
     if (!s) return;
     if (strncmp(g_status, s, sizeof(g_status)) == 0) return;   /* unchanged → no notify */
     cyw43_thread_enter();
@@ -315,45 +315,45 @@ void dilder_bt_set_status(const char *s) {
     cyw43_thread_exit();
 }
 
-int dilder_bt_take_command(void) {
+int wetgreg_bt_take_command(void) {
     int c = g_cmd;
     g_cmd = -1;
     return c;
 }
 
-bt_state_t  dilder_bt_state(void)   { return g_state; }
-const char *dilder_bt_peer(void)    { return g_peer; }
-bool        dilder_bt_active(void)  { return g_active; }
-uint32_t    dilder_bt_passkey(void) { return g_passkey; }
+bt_state_t  wetgreg_bt_state(void)   { return g_state; }
+const char *wetgreg_bt_peer(void)    { return g_peer; }
+bool        wetgreg_bt_active(void)  { return g_active; }
+uint32_t    wetgreg_bt_passkey(void) { return g_passkey; }
 
-/* ── Dilder-to-Dilder social ── */
+/* ── WetGreg-to-WetGreg social ── */
 
 /* All of these only set intent flags — g_social_tick() (run-loop ctx) acts on
  * them. No BTstack calls here, so they're safe to call from the app task. */
-void dilder_social_set_self(uint16_t id) {
+void wetgreg_social_set_self(uint16_t id) {
     g_self_id = id;
     g_adv_dirty = true;
 }
 
-void dilder_social_enable(bool on) {
+void wetgreg_social_enable(bool on) {
     g_social = on;             /* tick reconciles the actual scan within ~250 ms */
 }
 
-bool dilder_social_active(void) { return g_social && g_scanning; }
+bool wetgreg_social_active(void) { return g_social && g_scanning; }
 
-void dilder_social_send_emote(uint16_t target_id, uint8_t emote) {
-    if (emote == 0) emote = DILDER_HELLO_FLAG;   /* never broadcast a 0 "directed" code */
+void wetgreg_social_send_emote(uint16_t target_id, uint8_t emote) {
+    if (emote == 0) emote = WETGREG_HELLO_FLAG;   /* never broadcast a 0 "directed" code */
     g_want_target = target_id;                   /* latest-wins: throws out any older send */
     g_want_emote  = emote;
     g_want_ttl    = 60;                          /* ~60 × 250 ms ≈ 15 s broadcast window */
     g_adv_dirty   = true;
 }
 
-void dilder_social_say_hello(uint16_t target_id) {
-    dilder_social_send_emote(target_id, DILDER_HELLO_FLAG);
+void wetgreg_social_say_hello(uint16_t target_id) {
+    wetgreg_social_send_emote(target_id, WETGREG_HELLO_FLAG);
 }
 
-bool dilder_social_poll(dilder_peer_t *out) {
+bool wetgreg_social_poll(wetgreg_peer_t *out) {
     if (!g_peer_pending) return false;
     out->id          = g_peer_id;
     out->hello_to_me = g_peer_hello;

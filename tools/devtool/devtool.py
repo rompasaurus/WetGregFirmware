@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-WetGreg DevTool — a focused build/flash/debug companion for the dilder-hub-rtos
-firmware running on the Dilder PCB (soldered Pico 2 W / RP2350) with a WeAct
+WetGreg DevTool — a focused build/flash/debug companion for the wetgreg-hub-rtos
+firmware running on the WetGreg PCB (soldered Pico 2 W / RP2350) with a WeAct
 2.13" V4 e-ink panel.
 
-This is the SLIM descendant of the original multi-board Dilder DevTool. It does
+This is the SLIM descendant of the original multi-board WetGreg DevTool. It does
 exactly three things, one per tab:
 
   1. Flash  — picotool setup, device info, and deployment:
@@ -17,14 +17,14 @@ exactly three things, one per tab:
               table of contents and search.
 
 Everything is hardcoded to the single supported target:
-    firmware : dilder-hub-rtos
+    firmware : wetgreg-hub-rtos
     board    : pico2_w        (RP2350)
     display  : V4             (WeAct 2.13" B&W, SSD1680)
-    wiring   : Dilder PCB     (e-ink on SPI0, GP17-22)
+    wiring   : WetGreg PCB     (e-ink on SPI0, GP17-22)
 
 It also has a CLI for headless use (build/flash from a script or over SSH):
     python3 devtool.py info          # picotool device info
-    python3 devtool.py flash         # flash existing build/dilder_hub_rtos.uf2
+    python3 devtool.py flash         # flash existing build/wetgreg_hub_rtos.uf2
     python3 devtool.py build-flash   # clean Docker build, then flash
     python3 devtool.py reboot        # reboot the Pico into BOOTSEL
     python3 devtool.py erase         # full chip erase (recovery)
@@ -50,18 +50,18 @@ from pathlib import Path
 # tools/devtool/devtool.py → tools/devtool → tools → <repo root>
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEV_SETUP    = PROJECT_ROOT / "dev-setup"
-RTOS_DIR     = DEV_SETUP / "dilder-hub-rtos"
+RTOS_DIR     = DEV_SETUP / "wetgreg-hub-rtos"
 BUILD_DIR    = RTOS_DIR / "build"
-UF2_NAME     = "dilder_hub_rtos.uf2"
+UF2_NAME     = "wetgreg_hub_rtos.uf2"
 UF2_PATH     = BUILD_DIR / UF2_NAME
 GUIDE_MD     = Path(__file__).resolve().parent / "DEVTOOL_GUIDE.md"
 
-DOCKER_SERVICE = "build-dilder-hub-rtos"
-PICO_BOARD     = "pico2_w"     # RP2350 (the Dilder PCB carries a soldered Pico 2 W)
+DOCKER_SERVICE = "build-wetgreg-hub-rtos"
+PICO_BOARD     = "pico2_w"     # RP2350 (the WetGreg PCB carries a soldered Pico 2 W)
 DISPLAY_VARIANT = "V4"         # WeAct 2.13" B&W panel (SSD1680)
 
-# Dilder PCB Rev 1 routes the WeAct e-ink header to GP17-22 on SPI0.
-EINK_PINS_DILDER_PCB = {"RST": 21, "DC": 20, "CS": 17, "BUSY": 22, "CLK": 18, "MOSI": 19}
+# WetGreg PCB Rev 1 routes the WeAct e-ink header to GP17-22 on SPI0.
+EINK_PINS_WETGREG_PCB = {"RST": 21, "DC": 20, "CS": 17, "BUSY": 22, "CLK": 18, "MOSI": 19}
 EINK_SPI_PORT = "spi0"
 
 # BOOTSEL drive labels: RP2040 → RPI-RP2, RP2350 (our board) → RP2350.
@@ -194,7 +194,7 @@ def eject_bootsel(mount_path, log=_default_log):
 
 
 def apply_eink_wiring(log=_default_log):
-    """Rewrite the vendored DEV_Config.c onto the Dilder PCB e-ink wiring (SPI0,
+    """Rewrite the vendored DEV_Config.c onto the WetGreg PCB e-ink wiring (SPI0,
     GP17-22). Idempotent; returns a summary string if it changed anything."""
     cfg = RTOS_DIR / "lib" / "Config" / "DEV_Config.c"
     if not cfg.exists():
@@ -204,7 +204,7 @@ def apply_eink_wiring(log=_default_log):
     except OSError:
         return None
     orig = text
-    for name, num in EINK_PINS_DILDER_PCB.items():
+    for name, num in EINK_PINS_WETGREG_PCB.items():
         text = re.sub(rf"(EPD_{name}_PIN\s*=\s*)\d+(\s*;)", rf"\g<1>{num}\g<2>", text)
     text = re.sub(r"(#define\s+SPI_PORT\s+)spi[01]\b", rf"\g<1>{EINK_SPI_PORT}", text)
     if text != orig:
@@ -212,7 +212,7 @@ def apply_eink_wiring(log=_default_log):
             cfg.write_text(text, encoding="utf-8")
         except OSError:
             return None
-        return "Dilder PCB e-ink wiring (SPI0, GP17-22)"
+        return "WetGreg PCB e-ink wiring (SPI0, GP17-22)"
     return None
 
 
@@ -250,7 +250,7 @@ def check_deps():
 
 
 def docker_build(log=_default_log, progress=None):
-    """Clean Docker build of dilder-hub-rtos. Returns the .uf2 path or raises."""
+    """Clean Docker build of wetgreg-hub-rtos. Returns the .uf2 path or raises."""
     def _p(v):
         if progress:
             progress(v)
@@ -271,7 +271,7 @@ def docker_build(log=_default_log, progress=None):
     if subprocess.run(["docker", "info"], capture_output=True, timeout=15).returncode != 0:
         raise RuntimeError("Docker is not running — start the docker service first")
 
-    # 3. Retarget the vendored e-ink driver onto the Dilder PCB wiring.
+    # 3. Retarget the vendored e-ink driver onto the WetGreg PCB wiring.
     w = apply_eink_wiring(log)
     if w:
         log(f"[build] applied {w}")
@@ -387,8 +387,70 @@ def full_erase(log=_default_log):
     return False, (err.strip() or "erase failed — hold BOOTSEL, plug in, retry")
 
 
+def _find_terminal():
+    """Return an argv prefix that runs a command in a visible terminal, or None.
+    The command runs so the user can enter their sudo password interactively."""
+    for term, prefix in (("kitty", ["kitty", "--hold", "bash", "-lc"]),
+                         ("alacritty", ["alacritty", "-e", "bash", "-lc"]),
+                         ("konsole", ["konsole", "-e", "bash", "-lc"]),
+                         ("gnome-terminal", ["gnome-terminal", "--", "bash", "-lc"]),
+                         ("xfce4-terminal", ["xfce4-terminal", "-e", "bash -lc"]),
+                         ("xterm", ["xterm", "-e", "bash", "-lc"])):
+        if shutil.which(term):
+            return prefix
+    return None
+
+
+def _pkg_install_picotool_cmd():
+    """Return the best shell command to install picotool via the system package
+    manager, or None if we don't know how. On Arch we prefer the AUR package
+    (paru/yay) because building picotool from source fails with GCC 15; the AUR
+    package carries the fix."""
+    if shutil.which("pacman"):
+        # In the official repos? (Some Arch derivatives ship it.)
+        if subprocess.run(["pacman", "-Si", "picotool"],
+                          capture_output=True).returncode == 0:
+            return "sudo pacman -S --needed picotool"
+        for helper in ("paru", "yay"):
+            if shutil.which(helper):
+                return f"{helper} -S --needed picotool"
+        return None
+    if shutil.which("apt"):
+        return "sudo apt update && sudo apt install -y picotool"
+    if shutil.which("dnf"):
+        return "sudo dnf install -y picotool"
+    return None
+
+
 def install_picotool(log=_default_log):
-    """Build picotool from the Pico SDK source. Returns (ok, message)."""
+    """Install picotool. Prefers the system package manager (handles the GCC 15
+    build break on Arch); only falls back to building from the Pico SDK source
+    on systems where that is known to work. Returns (ok, message)."""
+    if find_picotool():
+        return True, f"picotool already installed: {find_picotool()}"
+
+    # 1. System package manager (the reliable path, esp. on Arch + GCC 15).
+    cmd = _pkg_install_picotool_cmd()
+    if cmd:
+        # The install needs sudo (a password), which we can't supply from a GUI
+        # subprocess. Launch it in a visible terminal so the user can authorise.
+        term = _find_terminal()
+        if term:
+            log(f"[picotool] launching installer in a terminal: {cmd}")
+            try:
+                subprocess.Popen(term + [f'echo "$ {cmd}"; {cmd}; '
+                                         'echo; echo "Done — close this window and '
+                                         'click Refresh in the DevTool."'])
+                return True, ("installing in a terminal window — enter your "
+                              "password there, then click Refresh")
+            except Exception as e:            # noqa: BLE001
+                log(f"[picotool] could not launch terminal: {e}")
+        # No terminal (headless / CLI): hand the user the exact command.
+        return False, (f"Run this to install picotool (needs sudo): {cmd}\n"
+                       "Then re-check. (Building from the SDK is skipped here "
+                       "because it fails with GCC 15 on Arch.)")
+
+    # 2. Fall back to the from-source SDK build (Debian/Fedora without a pkg).
     sdk = os.environ.get("PICO_SDK_PATH", "")
     if not sdk:
         for c in (Path.home() / "pico" / "pico-sdk", Path.home() / "pico-sdk",
@@ -397,8 +459,8 @@ def install_picotool(log=_default_log):
                 sdk = str(c)
                 break
     if not sdk:
-        return False, ("Pico SDK not found. Install picotool from your package "
-                       "manager instead (e.g. sudo pacman -S picotool).")
+        return False, ("Pico SDK not found and no package manager picotool. "
+                       "Install picotool manually, then click Refresh.")
     src = Path(sdk).parent / "picotool"
     if not src.exists():
         log("[picotool] cloning picotool ...")
@@ -427,12 +489,12 @@ def install_picotool(log=_default_log):
 def _cli(argv):
     p = argparse.ArgumentParser(
         prog="devtool",
-        description="WetGreg DevTool — build/flash/debug for dilder-hub-rtos "
-                    "(Dilder PCB, Pico 2 W, WeAct 2.13\" V4).")
+        description="WetGreg DevTool — build/flash/debug for wetgreg-hub-rtos "
+                    "(WetGreg PCB, Pico 2 W, WeAct 2.13\" V4).")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("gui", help="launch the GUI (default)")
     sub.add_parser("info", help="picotool device info")
-    f = sub.add_parser("flash", help="flash the existing build/dilder_hub_rtos.uf2")
+    f = sub.add_parser("flash", help="flash the existing build/wetgreg_hub_rtos.uf2")
     f.add_argument("uf2", nargs="?", help="path to a .uf2 (defaults to the RTOS build)")
     sub.add_parser("build-flash", help="clean Docker build, then flash")
     sub.add_parser("build", help="clean Docker build only (no flash)")
@@ -520,7 +582,7 @@ class DevToolApp:
         class _App(tk.Tk):
             def __init__(self):
                 super().__init__()
-                self.title("WetGreg DevTool — dilder-hub-rtos")
+                self.title("WetGreg DevTool — wetgreg-hub-rtos")
                 self.geometry("1080x720")
                 self.configure(bg=BG_DARK)
                 self._init_style()
@@ -546,8 +608,8 @@ class DevToolApp:
                 self.log_text.pack(fill=tk.BOTH, expand=True)
                 outer.add(logf, weight=1)
 
-                self.log(f"WetGreg DevTool ready. Target: dilder-hub-rtos / "
-                         f"{PICO_BOARD} / display {DISPLAY_VARIANT} / Dilder PCB.")
+                self.log(f"WetGreg DevTool ready. Target: wetgreg-hub-rtos / "
+                         f"{PICO_BOARD} / display {DISPLAY_VARIANT} / WetGreg PCB.")
 
             def _init_style(self):
                 st = ttk.Style(self)
@@ -589,6 +651,200 @@ class DevToolApp:
 # modules (only importable when a display is available). Each returns a ttk.Frame
 # subclass instance.
 
+# Right-hand "how to" panels shown beside the Flash and Debug controls.
+FLASH_GUIDE_TEXT = """HOW TO FLASH — step by step
+═══════════════════════════
+
+THE 10-SECOND VERSION
+  1. Plug the WetGreg (Pico 2 W) into USB.
+  2. Click "Clean Build & Flash".
+  3. Watch the Log panel at the bottom — done.
+
+You never press the BOOTSEL button. picotool
+reboots the board into BOOTSEL over USB, copies
+the firmware, and the board reboots itself.
+
+
+1 · picotool (do this once)
+───────────────────────────
+picotool is what lets us flash without touching
+the BOOTSEL button. If the status reads
+"not found", click "Install picotool".
+
+  • On Arch/CachyOS it installs the AUR package
+    in a terminal — enter your password there,
+    then click Refresh.
+  • Building picotool from source fails with
+    GCC 15, so we use the package manager.
+
+
+2 · Device (is the board there?)
+────────────────────────────────
+  • Device Info  — prints what is *actually*
+    running on the board (program name, version,
+    flash id). Your first sanity check.
+  • Reboot to BOOTSEL — drops the board into USB
+    drive mode and leaves it there.
+  • Full Erase — wipes ALL flash. Only for
+    rescuing a board that won't boot after a
+    brownout. Re-flash firmware afterward.
+
+
+3 · Deploy (get firmware on)
+────────────────────────────
+  • Clean Build & Flash
+      Changed the firmware source? Use this.
+      Deletes build/, recompiles in Docker from
+      scratch, then flashes. ~1 min after the
+      first (cached) build.
+
+  • Flash (existing build)
+      Source unchanged? Skip the compile and
+      flash the last build/wetgreg_hub_rtos.uf2.
+      Instant.
+
+  • Build Only
+      Compile but don't flash — catch compile
+      errors with no board attached.
+
+  • Browse .uf2…
+      Flash any file you pick instead of the
+      default build.
+
+
+IF SOMETHING GOES WRONG
+───────────────────────
+  • "BOOTSEL drive didn't appear" — the reboot
+    didn't take. Hold BOOTSEL, plug in, release,
+    then Flash once. picotool works after that.
+  • "reboot failed — is the Pico running?" — the
+    firmware is hung. Same manual-BOOTSEL fix.
+  • Board shows snow / won't boot — Full Erase,
+    then Clean Build & Flash.
+
+Full reference lives in the Docs tab.
+"""
+
+DEBUG_GUIDE_TEXT = """HOW TO DEBUG
+════════════
+
+Two tools live here: a one-click environment
+check, and a live serial monitor.
+
+
+ENVIRONMENT DIAGNOSTICS
+───────────────────────
+Click "Run diagnostics" whenever a build or
+flash misbehaves. Each row is green OK or red
+FAIL:
+
+  • cmake / ninja / arm-gcc — the toolchain
+    (also baked into the Docker image).
+  • docker + docker daemon — the build runs in a
+    container; the daemon must be up. Start it
+    with: sudo systemctl start docker
+  • git — needed for the SDK + submodules.
+  • picotool — needed to flash.
+  • FreeRTOS-Kernel submodule — the firmware
+    won't link without it. Fix:
+      git submodule update --init --recursive
+  • Pico serial port — confirms the board shows
+    up as /dev/ttyACM*.
+
+This usually points straight at the problem.
+
+
+SERIAL MONITOR (live printf)
+────────────────────────────
+See what the firmware prints at runtime.
+
+  1. Plug in the board (running firmware, NOT in
+     BOOTSEL mode).
+  2. Pick the Port — it auto-detects the Pico
+     (USB VID 2E8A). Hit Refresh if you plugged
+     in after opening the tab.
+  3. Click Connect. The label turns green.
+  4. printf output streams into the black panel.
+
+  • The input box sends a line (Enter or Send).
+  • Ctrl+C sends an interrupt byte.
+  • Reset (Ctrl+D) sends a soft-reset byte.
+  • Clear empties the view; Save Log… writes it
+    to a timestamped file.
+
+
+A GOOD DEBUG LOOP
+─────────────────
+  1. Add printf() lines in the firmware.
+  2. Flash tab → Clean Build & Flash.
+  3. Come back here → Connect → watch the output.
+  4. Repeat. Disconnect before re-flashing (the
+     serial port frees up automatically on
+     reboot, but disconnecting is tidier).
+
+
+COMMON SNAGS
+────────────
+  • No ports listed — board is in BOOTSEL mode,
+    not running firmware, or the cable is
+    charge-only. Click Refresh.
+  • "permission denied" — add yourself to the
+    uucp (Arch) / dialout (Debian) group, then
+    log out and back in.
+  • "pyserial is not installed" — pip install
+    pyserial. Only the monitor needs it; the
+    rest of the tool is unaffected.
+"""
+
+
+def _guide_panel(parent, title, body):
+    """A read-only scrollable 'how to' text panel for the right of a tab."""
+    tk, ttk, _fd, _mb = _gui_imports()
+    frame = ttk.LabelFrame(parent, text=title)
+    txt = tk.Text(frame, wrap=tk.WORD, bg="#11111b", fg=FG_TEXT,
+                  font=("JetBrains Mono", 9), relief=tk.FLAT, padx=10, pady=8)
+    sb = ttk.Scrollbar(frame, command=txt.yview)
+    txt.configure(yscrollcommand=sb.set)
+    sb.pack(side=tk.RIGHT, fill=tk.Y)
+    txt.pack(fill=tk.BOTH, expand=True)
+    txt.tag_configure("head", foreground=FG_ACCENT,
+                      font=("JetBrains Mono", 9, "bold"))
+    txt.insert("1.0", body)
+    # Highlight section headers (lines immediately above a ─── or ═══ rule).
+    lines = body.split("\n")
+    for i, ln in enumerate(lines):
+        if set(ln.strip()) <= {"─", "═"} and ln.strip() and i > 0:
+            txt.tag_add("head", f"{i}.0", f"{i}.end")
+    txt.configure(state=tk.DISABLED)
+    return frame
+
+
+def _init_sashes(pw, fractions):
+    """Place a PanedWindow's sashes at the given fractions of its size, once,
+    when it is first realized. Keeps panes proportional at startup while still
+    leaving them user-resizable. `fractions` are cumulative (e.g. [1/3, 2/3] for
+    three equal panes, [0.55] for a 55/45 two-pane split)."""
+    state = {"done": False}
+
+    def _apply(_evt=None):
+        if state["done"]:
+            return
+        pw.update_idletasks()
+        horiz = "horizontal" in str(pw.cget("orient"))
+        total = pw.winfo_width() if horiz else pw.winfo_height()
+        if total <= 1:                      # not sized yet — try again shortly
+            pw.after(60, _apply)
+            return
+        for i, f in enumerate(fractions):
+            try:
+                pw.sashpos(i, int(total * f))
+            except Exception:               # noqa: BLE001
+                pass
+        state["done"] = True
+
+    pw.bind("<Map>", lambda e: pw.after(80, _apply), add="+")
+
+
 def FlashTab(parent, app):
     tk, ttk, filedialog, messagebox = _gui_imports()
 
@@ -603,36 +859,46 @@ def FlashTab(parent, app):
         def _build(self):
             pad = dict(padx=8, pady=4)
 
+            # Split: controls on the left, a "how to" guide on the right.
+            split = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+            split.pack(fill=tk.BOTH, expand=True)
+            left = ttk.Frame(split)
+            right = ttk.Frame(split)
+            split.add(left, weight=3)
+            split.add(right, weight=2)
+
+            # Left side: the three sections in an equal, resizable vertical split.
+            lpw = ttk.PanedWindow(left, orient=tk.VERTICAL)
+            lpw.pack(fill=tk.BOTH, expand=True, **pad)
+
             # 1. picotool setup
-            sf = ttk.LabelFrame(self, text="  1. picotool  ")
-            sf.pack(fill=tk.X, **pad)
+            sf = ttk.LabelFrame(lpw, text="  1. picotool  ")
             row = ttk.Frame(sf); row.pack(fill=tk.X, padx=8, pady=6)
-            ttk.Button(row, text="Install picotool (from SDK)",
+            ttk.Button(row, text="Install picotool",
                        command=self._install).pack(side=tk.LEFT, padx=(0, 4))
             ttk.Button(row, text="Refresh", command=self._refresh_status).pack(side=tk.LEFT)
-            self._tool_lbl = ttk.Label(sf, text="checking…", foreground=FG_DIM)
+            self._tool_lbl = ttk.Label(sf, text="checking…", foreground=FG_DIM,
+                                       wraplength=380, justify=tk.LEFT)
             self._tool_lbl.pack(anchor=tk.W, padx=8, pady=(0, 6))
 
             # 2. device
-            df = ttk.LabelFrame(self, text="  2. Device (Pico 2 W over USB)  ")
-            df.pack(fill=tk.X, **pad)
+            df = ttk.LabelFrame(lpw, text="  2. Device (Pico 2 W over USB)  ")
             row = ttk.Frame(df); row.pack(fill=tk.X, padx=8, pady=6)
             ttk.Button(row, text="Device Info", command=self._device_info).pack(side=tk.LEFT, padx=(0, 4))
             ttk.Button(row, text="Reboot to BOOTSEL", command=self._reboot).pack(side=tk.LEFT, padx=(0, 4))
             ttk.Button(row, text="Full Erase (recovery)", command=self._erase).pack(side=tk.LEFT)
             self._dev_lbl = ttk.Label(df, text="plug in the Pico via USB", foreground=FG_DIM)
             self._dev_lbl.pack(anchor=tk.W, padx=8)
-            self._dev_txt = tk.Text(df, height=5, bg="#11111b", fg=FG_TEXT, font=MONO,
-                                    relief=tk.FLAT, wrap=tk.WORD)
-            self._dev_txt.pack(fill=tk.X, padx=8, pady=(4, 8))
+            self._dev_txt = tk.Text(df, height=4, width=40, bg="#11111b", fg=FG_TEXT,
+                                    font=MONO, relief=tk.FLAT, wrap=tk.WORD)
+            self._dev_txt.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
             self._dev_txt.configure(state=tk.DISABLED)
 
             # 3. deploy
-            ff = ttk.LabelFrame(self, text="  3. Deploy firmware (no BOOTSEL button needed)  ")
-            ff.pack(fill=tk.BOTH, expand=True, **pad)
+            ff = ttk.LabelFrame(lpw, text="  3. Deploy firmware (no BOOTSEL button needed)  ")
 
             info = ttk.Label(ff, foreground=FG_DIM, justify=tk.LEFT,
-                             text="Clean Build & Flash → Docker compiles dilder-hub-rtos from\n"
+                             text="Clean Build & Flash → Docker compiles wetgreg-hub-rtos from\n"
                                   "scratch, then picotool reboots the Pico and flashes it.\n"
                                   "Flash (existing) → flash the last build without recompiling.")
             info.pack(anchor=tk.W, padx=8, pady=(6, 4))
@@ -657,6 +923,19 @@ def FlashTab(parent, app):
             self._status = ttk.Label(ff, text="Ready", foreground=FG_DIM)
             self._status.pack(anchor=tk.W, padx=8, pady=(0, 8))
             self._custom_uf2 = None
+
+            # Add the three sections as resizable panes. Section 1 (picotool) is
+            # half the height of sections 2 & 3 — it only holds two buttons and a
+            # status line. Weights keep that ratio (1:2:2) as the window resizes.
+            lpw.add(sf, weight=1)
+            lpw.add(df, weight=2)
+            lpw.add(ff, weight=2)
+            _init_sashes(lpw, [0.2, 0.6])          # 1/5, 2/5, 2/5 at startup
+
+            # Right: how-to guide
+            _guide_panel(right, "  How to flash  ", FLASH_GUIDE_TEXT).pack(
+                fill=tk.BOTH, expand=True, **pad)
+            _init_sashes(split, [0.56])            # ~56/44 controls/guide
 
         # ---- helpers ----
         def _set(self, lbl, text, colour=FG_DIM):
@@ -812,23 +1091,33 @@ def DebugTab(parent, app):
         def _build(self):
             pad = dict(padx=8, pady=4)
 
+            # Split: tools on the left, a "how to debug" guide on the right.
+            split = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+            split.pack(fill=tk.BOTH, expand=True)
+            left = ttk.Frame(split)
+            right = ttk.Frame(split)
+            split.add(left, weight=3)
+            split.add(right, weight=2)
+
+            # Left side: diagnostics + serial monitor in a resizable vertical split.
+            lpw = ttk.PanedWindow(left, orient=tk.VERTICAL)
+            lpw.pack(fill=tk.BOTH, expand=True, **pad)
+
             # Diagnostics
-            diag = ttk.LabelFrame(self, text="  Environment diagnostics  ")
-            diag.pack(fill=tk.X, **pad)
+            diag = ttk.LabelFrame(lpw, text="  Environment diagnostics  ")
             row = ttk.Frame(diag); row.pack(fill=tk.X, padx=8, pady=6)
             ttk.Button(row, text="Run diagnostics", command=self._run_diagnostics).pack(side=tk.LEFT)
-            ttk.Label(row, text="  checks cmake / ninja / arm-gcc / docker / picotool / "
+            ttk.Label(row, text="  cmake / ninja / arm-gcc / docker / picotool / "
                                 "submodule / serial", foreground=FG_DIM).pack(side=tk.LEFT)
-            self._diag_txt = tk.Text(diag, height=9, bg="#11111b", fg=FG_TEXT, font=MONO,
-                                     relief=tk.FLAT, wrap=tk.NONE)
-            self._diag_txt.pack(fill=tk.X, padx=8, pady=(0, 8))
+            self._diag_txt = tk.Text(diag, height=8, width=40, bg="#11111b", fg=FG_TEXT,
+                                     font=MONO, relief=tk.FLAT, wrap=tk.NONE)
+            self._diag_txt.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
             self._diag_txt.configure(state=tk.DISABLED)
             for tagname, col in (("ok", FG_GREEN), ("bad", FG_RED)):
                 self._diag_txt.tag_configure(tagname, foreground=col)
 
             # Serial monitor
-            mon = ttk.LabelFrame(self, text="  Serial monitor (live printf output, 115200 baud)  ")
-            mon.pack(fill=tk.BOTH, expand=True, **pad)
+            mon = ttk.LabelFrame(lpw, text="  Serial monitor (live printf output, 115200 baud)  ")
             ctl = ttk.Frame(mon); ctl.pack(fill=tk.X, padx=8, pady=6)
             ttk.Label(ctl, text="Port:").pack(side=tk.LEFT)
             self._port_var = tk.StringVar()
@@ -842,7 +1131,7 @@ def DebugTab(parent, app):
             self._conn_lbl = ttk.Label(ctl, text="disconnected", foreground=FG_DIM)
             self._conn_lbl.pack(side=tk.LEFT, padx=8)
 
-            self._mon_txt = tk.Text(mon, bg="#11111b", fg=FG_GREEN, font=MONO,
+            self._mon_txt = tk.Text(mon, width=40, bg="#11111b", fg=FG_GREEN, font=MONO,
                                     relief=tk.FLAT, wrap=tk.CHAR)
             msb = ttk.Scrollbar(mon, command=self._mon_txt.yview)
             self._mon_txt.configure(yscrollcommand=msb.set)
@@ -857,6 +1146,16 @@ def DebugTab(parent, app):
             ttk.Button(send, text="Send", command=self._send).pack(side=tk.LEFT, padx=2)
             ttk.Button(send, text="Ctrl+C", command=lambda: self._send_raw(b"\x03")).pack(side=tk.LEFT, padx=2)
             ttk.Button(send, text="Reset (Ctrl+D)", command=lambda: self._send_raw(b"\x04")).pack(side=tk.LEFT, padx=2)
+
+            # Add diagnostics + monitor as resizable panes (monitor gets more room).
+            lpw.add(diag, weight=2)
+            lpw.add(mon, weight=3)
+            _init_sashes(lpw, [0.42])
+
+            # Right: how-to guide
+            _guide_panel(right, "  How to debug  ", DEBUG_GUIDE_TEXT).pack(
+                fill=tk.BOTH, expand=True, **pad)
+            _init_sashes(split, [0.56])            # ~56/44 tools/guide
 
             self._refresh_ports()
 

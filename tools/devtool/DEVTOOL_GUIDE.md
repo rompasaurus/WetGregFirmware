@@ -1,6 +1,6 @@
 # WetGreg DevTool — User Guide
 
-A focused build / flash / debug companion for the **dilder-hub-rtos** firmware.
+A focused build / flash / debug companion for the **wetgreg-hub-rtos** firmware.
 
 This guide is rendered live inside the DevTool's **Docs** tab, and it also reads
 fine as a normal Markdown file. Whenever you are unsure what a button does, this
@@ -11,7 +11,7 @@ is the place to look.
 # 1. What this tool is
 
 The WetGreg DevTool is the slimmed-down descendant of the original multi-board
-Dilder DevTool. The original supported many boards, displays, on-device
+WetGreg DevTool. The original supported many boards, displays, on-device
 "programs", an image editor, an emulator, and a dozen tabs. **This one does only
 what you need to ship the hub firmware**, organised into three tabs:
 
@@ -25,12 +25,12 @@ Everything is locked to **one** target so there is nothing to configure:
 
 | Setting      | Value                                            |
 |--------------|--------------------------------------------------|
-| Firmware     | `dilder-hub-rtos`                                |
+| Firmware     | `wetgreg-hub-rtos`                                |
 | Board        | `pico2_w` — Raspberry Pi Pico 2 W (RP2350)        |
 | Display      | `V4` — WeAct 2.13" B&W e-ink (SSD1680 controller) |
-| e-ink wiring | Dilder PCB — SPI0, GP17–22                         |
+| e-ink wiring | WetGreg PCB — SPI0, GP17–22                         |
 
-> The Dilder PCB carries a **soldered Pico 2 W module**, so to the toolchain it
+> The WetGreg PCB carries a **soldered Pico 2 W module**, so to the toolchain it
 > behaves exactly like a Pico 2 W (RP2350 silicon, `RP2350` BOOTSEL drive).
 
 ---
@@ -40,7 +40,7 @@ Everything is locked to **one** target so there is nothing to configure:
 If your machine already has Docker, the ARM toolchain, and picotool, the whole
 loop is two clicks:
 
-1. Plug the Dilder (Pico 2 W) into USB.
+1. Plug the WetGreg (Pico 2 W) into USB.
 2. Open the DevTool: `python3 tools/devtool/devtool.py`
 3. On the **Flash** tab, click **Clean Build & Flash**.
 
@@ -63,7 +63,10 @@ picotool. On Arch / CachyOS:
 ```bash
 sudo pacman -S --needed docker docker-compose cmake ninja git \
                         arm-none-eabi-gcc arm-none-eabi-newlib \
-                        tk python python-pyserial picotool
+                        tk python python-pyserial
+# picotool is AUR-only on Arch/CachyOS (and building it from the SDK fails with
+# GCC 15) — install it from the AUR, which carries the fix:
+paru -S picotool      # or: yay -S picotool
 ```
 
 On Debian / Ubuntu:
@@ -147,15 +150,15 @@ Quick picotool actions against the connected board:
 The three buttons that get firmware onto the board:
 
 - **Clean Build & Flash** — the headline action. Steps:
-  1. Delete `dev-setup/dilder-hub-rtos/build/` (a *clean* build, no stale state).
-  2. Retarget the e-ink driver onto the Dilder PCB wiring (SPI0, GP17–22).
+  1. Delete `dev-setup/wetgreg-hub-rtos/build/` (a *clean* build, no stale state).
+  2. Retarget the e-ink driver onto the WetGreg PCB wiring (SPI0, GP17–22).
   3. `docker compose build` the toolchain image (cached after the first run).
-  4. `docker compose run` → CMake + Ninja compile `dilder_hub_rtos.uf2`.
+  4. `docker compose run` → CMake + Ninja compile `wetgreg_hub_rtos.uf2`.
   5. picotool reboots the board to BOOTSEL and copies the `.uf2`.
   Use this whenever you've changed firmware source.
 
 - **Flash (existing build)** — skip the compile and flash the last
-  `build/dilder_hub_rtos.uf2`. Instant; use it when the source hasn't changed
+  `build/wetgreg_hub_rtos.uf2`. Instant; use it when the source hasn't changed
   (e.g. you reflashed by accident, or moved the board to another machine).
 
 - **Build Only** — compile but don't flash. Handy for catching compile errors
@@ -246,11 +249,11 @@ python3 tools/devtool/devtool.py gui           # launch the GUI (also the defaul
 ```
 WetGregFirmware/
 ├── dev-setup/
-│   ├── dilder-hub-rtos/        ← the firmware (main.c, rtos_tasks.c, bt.c, lib/…)
+│   ├── wetgreg-hub-rtos/        ← the firmware (main.c, rtos_tasks.c, bt.c, lib/…)
 │   │   ├── CMakeLists.txt       ← the build recipe
 │   │   └── build/               ← output (.uf2/.elf) — git-ignored
 │   ├── Dockerfile               ← Ubuntu + ARM toolchain + pico-sdk
-│   └── docker-compose.yml       ← the single build-dilder-hub-rtos service
+│   └── docker-compose.yml       ← the single build-wetgreg-hub-rtos service
 ├── FreeRTOS-Kernel/             ← submodule (the RTOS scheduler)
 ├── picowota/                    ← submodule (optional Wi-Fi OTA bootloader)
 └── tools/devtool/               ← this tool
@@ -265,14 +268,14 @@ version on your host:
    **FreeRTOS-Kernel** submodule at `/FreeRTOS-Kernel` (pointed at via
    `FREERTOS_KERNEL_PATH`), and **picowota** at `/picowota`.
 3. The container runs `cmake -G Ninja -DPICO_BOARD=pico2_w -DDISPLAY_VARIANT=V4`
-   then `ninja`, producing `build/dilder_hub_rtos.uf2`.
+   then `ninja`, producing `build/wetgreg_hub_rtos.uf2`.
 
 Because the kernel and SDK are pinned (submodule commit + the SDK clone), builds
 are reproducible across machines.
 
 ## 8.1 e-ink wiring
 
-The Dilder PCB routes the WeAct 2.13" panel to **SPI0, GP17–22**:
+The WetGreg PCB routes the WeAct 2.13" panel to **SPI0, GP17–22**:
 
 | Signal | GPIO |
 |--------|------|
@@ -288,7 +291,7 @@ these pins (idempotent), so the firmware always matches the board.
 
 ## 8.2 Wi-Fi credentials (optional)
 
-Networking features read `dev-setup/dilder-hub-rtos/wifi_config.h`. The checked-in
+Networking features read `dev-setup/wetgreg-hub-rtos/wifi_config.h`. The checked-in
 file has placeholders. To use real credentials without committing them, pass
 them at build time via CMake `-D` flags, or keep a local copy — never commit real
 passwords.
@@ -301,7 +304,8 @@ passwords.
 |-------------------------------------------|-------------------------------------------------------------------------------------|
 | `Docker is not running`                   | Start it: `sudo systemctl start docker`. Add yourself to the `docker` group.        |
 | Build fails on `FreeRTOS-Kernel`          | `git submodule update --init --recursive`.                                           |
-| `picotool not found`                      | Install it (§3.1) or click **Install picotool (from SDK)**.                          |
+| `picotool not found`                      | Click **Install picotool** (uses the AUR on Arch), or install per §3.1.              |
+| picotool install fails on `elf2uf2.cpp` / `bintool.cpp` | GCC 15 can't compile picotool from source. On Arch use the AUR package: `paru -S picotool`. The DevTool's Install button now does this for you. |
 | Flash: "BOOTSEL drive didn't appear"      | The reboot didn't take. Do a manual BOOTSEL once, flash, then picotool works again.  |
 | `reboot failed — is the Pico running?`    | The firmware is hung. Manual BOOTSEL (hold button, plug in), then Flash.             |
 | Serial monitor: no ports                  | Click **Refresh**. Check the board isn't in BOOTSEL mode, and the cable is data-capable. |

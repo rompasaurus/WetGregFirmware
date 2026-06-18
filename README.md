@@ -1,19 +1,19 @@
 # WetGregFirmware
 
-Firmware and tooling for the **Dilder hub** — a FreeRTOS application running on a
-**Raspberry Pi Pico 2 W (RP2350)** soldered onto the **Dilder PCB**, driving a
+Firmware and tooling for the **WetGreg hub** — a FreeRTOS application running on a
+**Raspberry Pi Pico 2 W (RP2350)** soldered onto the **WetGreg PCB**, driving a
 **WeAct 2.13" B&W e-ink** display.
 
-This repository is a deliberately **narrow** extraction of the larger Dilder
+This repository is a deliberately **narrow** extraction of the larger WetGreg
 project. It carries exactly one firmware target and a single-purpose dev tool, so
 there is nothing to configure and no unrelated hardware to reason about:
 
 | Setting      | Value                                            |
 |--------------|--------------------------------------------------|
-| Firmware     | `dilder-hub-rtos` (FreeRTOS / SMP)               |
+| Firmware     | `wetgreg-hub-rtos` (FreeRTOS / SMP)               |
 | Board        | `pico2_w` — Raspberry Pi Pico 2 W (RP2350)        |
 | Display      | `V4` — WeAct 2.13" B&W e-ink (SSD1680 controller) |
-| e-ink wiring | Dilder PCB — SPI0, GP17–22                         |
+| e-ink wiring | WetGreg PCB — SPI0, GP17–22                         |
 
 ---
 
@@ -44,7 +44,7 @@ git submodule update --init --recursive
 # 2. Install the toolchain (Docker, ARM gcc, picotool, tk, pyserial, udev rules)
 ./install-deps.sh
 
-# 3. Plug in the Dilder (Pico 2 W) over USB, then either:
+# 3. Plug in the WetGreg (Pico 2 W) over USB, then either:
 python3 tools/devtool/devtool.py          # GUI → Flash tab → Clean Build & Flash
 #    …or headless:
 python3 tools/devtool/devtool.py build-flash
@@ -60,14 +60,15 @@ build after that is cached and takes well under a minute.
 ```
 WetGregFirmware/
 ├── README.md                     ← you are here (project overview)
+├── FIRMWARE_DEVELOPMENT_GUIDE.md ← architecture, design rules, features, testing system, resources
 ├── install-deps.sh               ← one-shot toolchain installer (Arch/Debian/Fedora)
 ├── .gitignore                    ← ignores build artifacts, caches, local secrets
 ├── .gitmodules                   ← submodule pins (FreeRTOS-Kernel, picowota)
 │
 ├── dev-setup/                    ← BUILD CONTEXT: firmware + Docker build infra
-│   ├── dilder-hub-rtos/          ← the firmware itself (the heart of the repo)
+│   ├── wetgreg-hub-rtos/          ← the firmware itself (the heart of the repo)
 │   ├── Dockerfile                ← Ubuntu + ARM toolchain + pico-sdk image
-│   ├── docker-compose.yml        ← the single `build-dilder-hub-rtos` service
+│   ├── docker-compose.yml        ← the single `build-wetgreg-hub-rtos` service
 │   └── version.h                 ← shared firmware version string
 │
 ├── FreeRTOS-Kernel/              ← submodule: the RTOS scheduler (pinned commit)
@@ -92,7 +93,7 @@ WetGregFirmware/
 Everything Docker needs to compile the firmware lives here. The directory is the
 Docker **build context** and the working directory for `docker compose`.
 
-- **`dev-setup/dilder-hub-rtos/`** — the firmware. Self-contained: it keeps its
+- **`dev-setup/wetgreg-hub-rtos/`** — the firmware. Self-contained: it keeps its
   *own* copy of the display library (so we can patch the e-ink driver) and its
   own SDK/RTOS import shims. Key files:
 
@@ -102,7 +103,7 @@ Docker **build context** and the working directory for `docker compose`.
   | `main.c`                | Application entry + the bulk of the app logic.                        |
   | `rtos_tasks.c/.h`       | FreeRTOS task orchestration (Input / Display / Housekeeping).         |
   | `freertos_hooks.c`      | Kernel-required callbacks (idle/timer memory, stack-overflow hook).   |
-  | `bt.c/.h`, `dilder.gatt`| Bluetooth LE (BTstack) + the GATT profile compiled into `dilder.h`.   |
+  | `bt.c/.h`, `wetgreg.gatt`| Bluetooth LE (BTstack) + the GATT profile compiled into `wetgreg.h`.   |
   | `FreeRTOSConfig.h`      | RTOS tuning (heap model, priorities, SMP).                            |
   | `lwipopts.h`            | lwIP (TCP/IP) options for the FreeRTOS networking stack.              |
   | `btstack_config.h`      | BTstack feature configuration.                                        |
@@ -126,7 +127,7 @@ Docker **build context** and the working directory for `docker compose`.
   `gcc-arm-none-eabi`, CMake, Ninja, and a fresh `pico-sdk` clone at
   `/opt/pico-sdk`. The default `CMD` configures and builds with CMake + Ninja.
 
-- **`dev-setup/docker-compose.yml`** — defines the single `build-dilder-hub-rtos`
+- **`dev-setup/docker-compose.yml`** — defines the single `build-wetgreg-hub-rtos`
   service. It mounts the firmware at `/project`, the FreeRTOS kernel at
   `/FreeRTOS-Kernel` (via `FREERTOS_KERNEL_PATH`), and picowota at `/picowota`,
   and pins `PICO_BOARD=pico2_w` / `DISPLAY_VARIANT=V4`.
@@ -174,22 +175,22 @@ The build runs **inside Docker** so your host doesn't need an exact SDK version.
         │        │                              -DDISPLAY_VARIANT=V4 │
         │        │                            ninja                  │
         │        ▼                                                  │
-        │  build/dilder_hub_rtos.uf2                                │
+        │  build/wetgreg_hub_rtos.uf2                                │
         │        │                                                  │
         │        ▼                                                  │
         │  picotool reboot -f -u  → BOOTSEL drive → copy .uf2 → eject → board reboots
         └──────────────────────────────────────────────────────────┘
 ```
 
-Before each build the DevTool rewrites the vendored e-ink HAL onto the Dilder
+Before each build the DevTool rewrites the vendored e-ink HAL onto the WetGreg
 PCB wiring (SPI0, GP17–22), so the firmware always matches the board.
 
 To build manually without the DevTool:
 
 ```bash
 cd dev-setup
-docker compose run --rm -e DISPLAY_VARIANT=V4 -e PICO_BOARD=pico2_w build-dilder-hub-rtos
-# → dev-setup/dilder-hub-rtos/build/dilder_hub_rtos.uf2
+docker compose run --rm -e DISPLAY_VARIANT=V4 -e PICO_BOARD=pico2_w build-wetgreg-hub-rtos
+# → dev-setup/wetgreg-hub-rtos/build/wetgreg_hub_rtos.uf2
 ```
 
 ---
@@ -253,7 +254,7 @@ git submodule update --init --recursive
 
 ## Best practices — adding to the project
 
-- **Firmware source changes** live under `dev-setup/dilder-hub-rtos/`. Add new
+- **Firmware source changes** live under `dev-setup/wetgreg-hub-rtos/`. Add new
   `.c` files to the `add_executable(...)` list in its `CMakeLists.txt` and add
   any new libraries to `target_link_libraries(...)`.
 - **Keep the display library vendored.** The e-ink driver in `lib/` is patched
@@ -275,10 +276,10 @@ git submodule update --init --recursive
 
 ## Conventions & invariants
 
-- **One target, on purpose.** Board = `pico2_w`, display = `V4`, wiring = Dilder
-  PCB. If you need another board/display, that belongs in the upstream Dilder
+- **One target, on purpose.** Board = `pico2_w`, display = `V4`, wiring = WetGreg
+  PCB. If you need another board/display, that belongs in the upstream WetGreg
   repo, not here.
-- **The `.uf2` name is `dilder_hub_rtos.uf2`** (derived from the CMake project
+- **The `.uf2` name is `wetgreg_hub_rtos.uf2`** (derived from the CMake project
   name). The DevTool and docs assume this.
 - **BOOTSEL drive label is `RP2350`** (RP2040 boards mount as `RPI-RP2`; both are
   handled, but this board is RP2350).

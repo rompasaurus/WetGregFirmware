@@ -12,7 +12,7 @@
  *
  *  WHY THIS FILE CHANGED FOR THE RTOS BUILD
  *  ----------------------------------------
- *  The original dilder-hub used lwIP in "NO_SYS" (bare-metal/polled) mode: there
+ *  The original wetgreg-hub used lwIP in "NO_SYS" (bare-metal/polled) mode: there
  *  was no operating system, so the main loop had to call cyw43_arch_poll()
  *  constantly to let the stack do work. That is exactly the busy-polling we are
  *  trying to escape.

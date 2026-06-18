@@ -1,7 +1,7 @@
 # 01 — Environment Setup (from a blank machine)
 
 This is the complete, step-by-step recipe to install **every** tool, library, and
-dependency needed to build, flash, and modify `dilder-hub-rtos`. It assumes you have
+dependency needed to build, flash, and modify `wetgreg-hub-rtos`. It assumes you have
 **never** built embedded C before. Follow it top to bottom once; after that, building is
 two commands.
 
@@ -103,17 +103,17 @@ Open a new terminal (or `source ~/.bashrc`) so `$PICO_SDK_PATH` is set.
 
 ---
 
-## 3. Get the Dilder repo (with **all** submodules, recursively)
+## 3. Get the WetGreg repo (with **all** submodules, recursively)
 
-The firmware lives in the Dilder repo, which itself has submodules:
+The firmware lives in the WetGreg repo, which itself has submodules:
 `picowota` (the Wi-Fi updater) and **`FreeRTOS-Kernel`**. Critically, **FreeRTOS-Kernel
 has its OWN submodules** (the RP2350 CPU port lives in a nested
 `Community-Supported-Ports` submodule). So you must clone **recursively**:
 
 ```bash
 cd ~/COdingProjects        # or wherever you keep code
-git clone --recurse-submodules <dilder-repo-url> Dilder
-cd Dilder
+git clone --recurse-submodules <wetgreg-repo-url> WetGreg
+cd WetGreg
 ```
 
 If you already cloned without `--recurse-submodules`, fix it:
@@ -148,17 +148,17 @@ ways to create it:
 cd tools/devtool
 python3 -m pip install -r requirements.txt   # if a requirements file exists
 python3 devtool.py
-# → Programs tab → select "Dilder Hub RTOS" → it writes dev-setup/dilder-hub-rtos/quotes.h
+# → Programs tab → select "WetGreg Hub RTOS" → it writes dev-setup/wetgreg-hub-rtos/quotes.h
 ```
 
 **B. Quick shortcut:** the RTOS variant uses the *same* quotes as the original, so you
 can simply copy the original's generated header if you have it:
 
 ```bash
-cp dev-setup/dilder-hub/quotes.h dev-setup/dilder-hub-rtos/quotes.h
+cp dev-setup/wetgreg-hub/quotes.h dev-setup/wetgreg-hub-rtos/quotes.h
 ```
 
-(If `dev-setup/dilder-hub/quotes.h` doesn't exist either, run the DevTool once for the
+(If `dev-setup/wetgreg-hub/quotes.h` doesn't exist either, run the DevTool once for the
 original too — it generates both.)
 
 ---
@@ -166,20 +166,20 @@ original too — it generates both.)
 ## 5. Build it (USB image)
 
 ```bash
-cd dev-setup/dilder-hub-rtos
+cd dev-setup/wetgreg-hub-rtos
 mkdir -p build && cd build
 cmake -G Ninja -DPICO_BOARD=pico2_w -DDISPLAY_VARIANT=V4 ..
 ninja
 ```
 
-Success looks like `Linking CXX executable dilder_hub_rtos.elf` and a
-`dilder_hub_rtos.uf2` in the `build/` folder.
+Success looks like `Linking CXX executable wetgreg_hub_rtos.elf` and a
+`wetgreg_hub_rtos.uf2` in the `build/` folder.
 
 > **What the flags mean:**
 > - `-G Ninja` → use the Ninja build runner (fast).
 > - `-DPICO_BOARD=pico2_w` → target the Pico 2 W board (RP2350 + Wi-Fi). **Required** —
 >   this selects the dual-core chip and the Wi-Fi/BT hardware.
-> - `-DDISPLAY_VARIANT=V4` → the WeAct 2.13" V4 e-ink panel the Dilder uses.
+> - `-DDISPLAY_VARIANT=V4` → the WeAct 2.13" V4 e-ink panel the WetGreg uses.
 
 The build finds FreeRTOS via `PICO_SDK_PATH` (for the SDK) and the project's
 `set(FREERTOS_KERNEL_PATH …/../../FreeRTOS-Kernel)` line in `CMakeLists.txt` (for the
@@ -193,14 +193,14 @@ kernel). If you keep the kernel elsewhere, pass `-DFREERTOS_KERNEL_PATH=/path` o
 **Option A — USB, hold the button:**
 1. Unplug the Pico. Hold its **BOOTSEL** button and plug in USB. It mounts as a USB drive
    named `RP2350`.
-2. Copy `build/dilder_hub_rtos.uf2` onto that drive. It reboots into the firmware.
+2. Copy `build/wetgreg_hub_rtos.uf2` onto that drive. It reboots into the firmware.
 
 **Option B — picotool, no button** (if the device is running firmware that supports it):
 ```bash
-picotool load -x build/dilder_hub_rtos.uf2
+picotool load -x build/wetgreg_hub_rtos.uf2
 ```
 
-**Option C — the DevTool**, Picotool or OTA tab, with `dilder-hub-rtos` selected. See
+**Option C — the DevTool**, Picotool or OTA tab, with `wetgreg-hub-rtos` selected. See
 **07-BUILD-AND-DEPLOY.md** for the full OTA (over-Wi-Fi) flow.
 
 ---
@@ -228,7 +228,7 @@ cmake -G Ninja -DPICO_BOARD=pico2_w -DDISPLAY_VARIANT=V4 \
 | CMake: *"PICO_SDK_PATH ... not found"* | env var unset | `export PICO_SDK_PATH=$HOME/pico/pico-sdk` |
 | `#error configENABLE_FPU must be defined` | wrong/edited `FreeRTOSConfig.h` | restore the ARMv8-M defines (see that file) |
 | `fatal error: FreeRTOS.h: No such file` | kernel not linked | check `FREERTOS_KERNEL_PATH` and the `include(FreeRTOS_Kernel_import.cmake)` line |
-| `quotes.h: No such file` | header not generated | run the DevTool Programs tab, or copy from `../dilder-hub` |
+| `quotes.h: No such file` | header not generated | run the DevTool Programs tab, or copy from `../wetgreg-hub` |
 | No `RP2350` drive on BOOTSEL | held button too late / cable is power-only | re-plug holding BOOTSEL; use a data cable |
 | Build links but Wi-Fi/BT dead on device | expected on a desktop "build only" check | it only runs on the real board; flash and test there |
 

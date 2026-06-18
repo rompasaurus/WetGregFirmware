@@ -2,8 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────
 # WetGregFirmware — Development Dependencies Installer
 #
-# Installs everything needed to build the dilder-hub-rtos firmware, run
-# the DevTool, and flash the Dilder PCB (soldered Pico 2 W / RP2350).
+# Installs everything needed to build the wetgreg-hub-rtos firmware, run
+# the DevTool, and flash the WetGreg PCB (soldered Pico 2 W / RP2350).
 # Supports Arch (pacman/yay), Debian/Ubuntu (apt), and Fedora (dnf).
 #
 # Usage:
