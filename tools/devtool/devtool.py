@@ -134,8 +134,35 @@ def find_pico_serial():
     return None
 
 
+def _windows_volume_label(drive_root):
+    """Read the volume label of a Windows drive (e.g. 'D:\\'). '' on failure."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(261)
+        rc = ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(drive_root), buf, 261,
+            None, None, None, None, 0)
+        return buf.value if rc else ""
+    except Exception:                    # noqa: BLE001
+        return ""
+
+
 def find_rpi_rp2_mount():
     """Find the BOOTSEL USB drive mountpoint, or None."""
+    if os.name == "nt":
+        # Windows: BOOTSEL mounts as a drive letter with volume label RP2350/RPI-RP2.
+        for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+            root = f"{letter}:\\"
+            if not os.path.exists(root):
+                continue
+            label = _windows_volume_label(root)
+            if label in BOOTSEL_LABELS:
+                return Path(root)
+            # Fallback: some firmware leaves the label blank — sniff for INFO_UF2.TXT.
+            if not label and os.path.exists(os.path.join(root, "INFO_UF2.TXT")):
+                return Path(root)
+        return None
+
     user = os.environ.get("USER", "")
     for label in BOOTSEL_LABELS:
         for p in (Path(f"/run/media/{user}/{label}"),
@@ -171,6 +198,10 @@ def eject_bootsel(mount_path, log=_default_log):
 
     The RP2 bootrom auto-reboots the instant it receives a complete .uf2, so all
     we need is to flush the write and clean up the mountpoint. Best-effort."""
+    if os.name == "nt":
+        # The bootrom reboots as soon as the .uf2 finishes copying — Windows
+        # releases the volume handle once the device disappears. Nothing to do.
+        return True
     try:
         subprocess.run(["sync"], timeout=5)
     except Exception:                # noqa: BLE001
@@ -315,7 +346,13 @@ def docker_build(log=_default_log, progress=None):
 
 
 def flash_uf2(uf2_path, log=_default_log, progress=None):
-    """Flash a .uf2: reboot to BOOTSEL → wait for drive → copy → eject."""
+    """Flash a .uf2 to the Pico.
+
+    Preferred path: `picotool load -fx <uf2>` — loads firmware directly over USB
+    and reboots into it. Works identically on Linux/macOS/Windows and dodges the
+    drive-letter copy that races the bootrom's auto-reboot.
+
+    Fallback (no picotool): reboot to BOOTSEL → wait for drive → copy → eject."""
     def _p(v):
         if progress:
             progress(v)
@@ -325,6 +362,28 @@ def flash_uf2(uf2_path, log=_default_log, progress=None):
         raise RuntimeError(f"firmware not found: {uf2_path}")
     name = uf2_path.name
 
+    # ── Preferred: picotool load (no drive copy, no race) ────────────────
+    if find_picotool():
+        log("[flash] loading via picotool ...")
+        _p(20)
+        # `-f` forces a reboot to BOOTSEL first if the device is running app code;
+        # `-x` executes the loaded image (i.e. reboots into the app). `-t uf2`
+        # tells picotool to treat the file as a UF2 regardless of extension.
+        rc, out, err = run_picotool(["load", "-fx", "-t", "uf2", str(uf2_path)],
+                                    timeout=60, log=log)
+        _p(90)
+        if rc == 0:
+            for line in (out + err).splitlines():
+                if line.strip():
+                    log(f"[picotool] {line.rstrip()}")
+            _p(100)
+            size_kb = uf2_path.stat().st_size // 1024
+            log(f"[flash] done — {name} ({size_kb} KB) flashed")
+            return
+        log(f"[flash] picotool load failed (rc={rc}): {err.strip() or out.strip()}")
+        log("[flash] falling back to BOOTSEL drive copy ...")
+
+    # ── Fallback: drive-letter copy ──────────────────────────────────────
     log(f"[flash] rebooting Pico to BOOTSEL ...")
     _p(10)
     rc, _out, _err = run_picotool(["reboot", "-f", "-u"], 8, log)
@@ -341,7 +400,18 @@ def flash_uf2(uf2_path, log=_default_log, progress=None):
 
     log(f"[flash] copying {name} ...")
     _p(60)
-    shutil.copy2(str(uf2_path), str(Path(mount) / name))
+    try:
+        shutil.copy2(str(uf2_path), str(Path(mount) / name))
+    except OSError as e:
+        # The RP2 bootrom reboots the instant the .uf2 is fully written, which
+        # tears the volume out from under the in-flight copy. Windows reports
+        # WinError 1006 ("volume has been externally altered"); Linux can yield
+        # ENODEV/ENOENT. If the mount disappeared, the flash succeeded.
+        winerr = getattr(e, "winerror", None)
+        if winerr in (1006, 21, 433) or not Path(mount).exists():
+            log("[flash] volume disappeared mid-copy — board rebooted (flash OK)")
+        else:
+            raise
     _p(80)
 
     log("[flash] flushing + unmounting (Pico reboots itself) ...")
