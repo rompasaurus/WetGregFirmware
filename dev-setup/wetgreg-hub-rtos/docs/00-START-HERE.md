@@ -1,6 +1,6 @@
-# Dilder Hub RTOS — Start Here
+# WetGreg Hub RTOS — Start Here
 
-Welcome. This folder is a **rewrite of the Dilder Hub firmware on top of a real-time
+Welcome. This folder is a **rewrite of the WetGreg Hub firmware on top of a real-time
 operating system (FreeRTOS)**, written deliberately as a *teaching codebase*. If you
 know JavaScript but are new to C, microcontrollers, and operating-system concepts,
 these docs are written for you. Nothing is assumed.
@@ -9,13 +9,13 @@ these docs are written for you. Nothing is assumed.
 
 ## What is this thing?
 
-The **Dilder** is a handheld gadget: a Raspberry Pi **Pico 2 W** board (which contains
+The **WetGreg** is a handheld gadget: a Raspberry Pi **Pico 2 W** board (which contains
 an **RP2350** chip — two CPU cores, 520 KB of RAM), a small **e-ink** screen, a 5-way
 joystick, an accelerometer, a battery, and Wi-Fi/Bluetooth. The firmware draws an
 animated octopus that shows moods and quotes, tracks your steps, talks to your phone
 over Bluetooth, and can update itself over Wi-Fi.
 
-The **original** firmware (`../dilder-hub`) works, but it is one giant loop running on a
+The **original** firmware (`../wetgreg-hub`) works, but it is one giant loop running on a
 single core. When the e-ink screen refreshes — which takes about **300 milliseconds** —
 the whole program is stuck waiting, so button presses feel laggy or get dropped.
 
@@ -46,7 +46,7 @@ If you come from JavaScript, the closest mental model:
 | You never see threads or locks | You DO — two cores can touch the same memory at once, so we use **mutexes** |
 | Garbage collector frees memory | **You** manage memory; there is no GC (see doc 04) |
 
-The Dilder "needs" one because it has genuinely concurrent work — refresh the screen,
+The WetGreg "needs" one because it has genuinely concurrent work — refresh the screen,
 poll the joystick, read the accelerometer, service Wi-Fi/Bluetooth, keep a clock — and
 on a single thread those fight each other. See **doc 03** for the full primer.
 
@@ -79,7 +79,7 @@ on a single thread those fight each other. See **doc 03** for the full primer.
 | 07 | **07-BUILD-AND-DEPLOY.md** | How to compile, flash over USB, and update over Wi-Fi (incl. the DevTool) |
 | 08 | **08-FUNCTION-REFERENCE.md** | Per-module breakdown of the important functions and calls |
 | 09 | **09-SOURCES-AND-FURTHER-READING.md** | Cited, linked references that justify these design choices |
-| 10 | **10-SOCIAL-AND-EMOTES.md** | Dilder-to-Dilder proximity hellos + emotes (connectionless BLE beacon), the Social menu, names, the met-log |
+| 10 | **10-SOCIAL-AND-EMOTES.md** | WetGreg-to-WetGreg proximity hellos + emotes (connectionless BLE beacon), the Social menu, names, the met-log |
 | 11 | **11-TROUBLESHOOTING.md** | Field diagnosis from the serial log — refresh-time/battery meters, the symptom→cause→fix chart, recovery |
 
 ---
@@ -113,12 +113,12 @@ If you just want it on the device, jump to **07-BUILD-AND-DEPLOY.md**. The short
 (after doing **01-ENVIRONMENT-SETUP.md** once) is:
 
 ```bash
-cd dev-setup/dilder-hub-rtos
+cd dev-setup/wetgreg-hub-rtos
 mkdir build && cd build
 cmake -G Ninja -DPICO_BOARD=pico2_w -DDISPLAY_VARIANT=V4 ..
 ninja
-# hold BOOTSEL, plug in the Pico, copy dilder_hub_rtos.uf2 onto the RP2350 drive
+# hold BOOTSEL, plug in the Pico, copy wetgreg_hub_rtos.uf2 onto the RP2350 drive
 ```
 
 …or use the **DevTool** GUI (Programs / Picotool / OTA tabs) which now lists
-`dilder-hub-rtos` as a selectable target.
+`wetgreg-hub-rtos` as a selectable target.

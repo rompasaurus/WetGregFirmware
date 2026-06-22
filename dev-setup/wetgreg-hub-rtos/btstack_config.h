@@ -1,13 +1,13 @@
 #ifndef BTSTACK_CONFIG_H
 #define BTSTACK_CONFIG_H
 
-/* BTstack configuration for the Dilder Hub — BLE peripheral with pairing/bonding.
+/* BTstack configuration for the WetGreg Hub — BLE peripheral with pairing/bonding.
  * Based on the Pico SDK picow_ble example config. */
 
 /* BTstack features */
 #define ENABLE_BLE
 #define ENABLE_LE_PERIPHERAL
-#define ENABLE_LE_CENTRAL                 /* scan/observer for Dilder-to-Dilder discovery */
+#define ENABLE_LE_CENTRAL                 /* scan/observer for WetGreg-to-WetGreg discovery */
 #define ENABLE_LE_SECURE_CONNECTIONS
 #define ENABLE_LE_DATA_LENGTH_EXTENSION
 #define ENABLE_LOG_ERROR

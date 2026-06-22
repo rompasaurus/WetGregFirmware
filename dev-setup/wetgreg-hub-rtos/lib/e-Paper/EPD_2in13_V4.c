@@ -1,6 +1,6 @@
 /*****************************************************************************
 * | File        :   EPD_2in13_V4.c
-* | Author      :   Waveshare team + Dilder project
+* | Author      :   Waveshare team + WetGreg project
 * | Function    :   2.13inch e-paper V4 (SSD1680)
 * | Info        :
 *   V1.5 — Flicker-free partial refresh using V3's custom LUT approach.

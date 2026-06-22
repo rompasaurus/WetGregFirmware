@@ -6,7 +6,7 @@
  * chat bubble, and text at display time.  This means ALL quotes fit
  * in flash (~10KB of strings vs ~4MB of bitmaps).
  *
- * Wiring — Dilder PCB / breadboard SPI0 (GP17-22, see DEV_Config.c):
+ * Wiring — WetGreg PCB / breadboard SPI0 (GP17-22, see DEV_Config.c):
  *   VCC  -> 3V3(OUT) pin 36    GND  -> GND      pin 38
  *   CS   -> GP17     pin 22    SCL  -> GP18     pin 24  (SPI0 SCK)
  *   SDA  -> GP19     pin 25    DC   -> GP20     pin 26  (SPI0 TX)
@@ -145,7 +145,7 @@ static void joystick_init(void) {
 /* ─── Input orientation remap ───────────────────────────────────────────
  * The joystick's physical up/down/left/right are remapped to logical
  * directions through a rotation, so the firmware can match how the device is
- * actually held.  On the Dilder board (held screen-left / joystick-right) the
+ * actually held.  On the WetGreg board (held screen-left / joystick-right) the
  * physical axes read reversed, so we default to 180° (up<->down, left<->right).
  *
  * This is the single hook the accelerometer feature will drive: once the IMU
@@ -158,7 +158,7 @@ typedef enum { ROT_0 = 0, ROT_90 = 1, ROT_180 = 2, ROT_270 = 3 } input_rotation_
  * atomic on the Cortex-M33, so no torn read — `volatile` just stops the compiler
  * caching it. INVARIANT: both Housekeeping and Input are pinned to core 0; if a
  * future phase moves either off core 0 this must become snapshot-/mutex-guarded. */
-static volatile input_rotation_t input_rotation = ROT_180;  /* default for the Dilder hold */
+static volatile input_rotation_t input_rotation = ROT_180;  /* default for the WetGreg hold */
 
 /* Display orientation state (declared early so the accel orientation_update()
  * can drive it). display_rotation is the panel-map angle (see transpose);
@@ -233,11 +233,11 @@ uint8_t read_joystick(void) {
 #define STATE_SAVED_NETS  11  /* Saved WiFi networks (connect / forget) */
 #define STATE_BLUETOOTH   12  /* Bluetooth pairing screen */
 #define STATE_SOCIAL          13  /* Social menu (toggle, met list, set name) */
-#define STATE_SOCIAL_PROMPT   14  /* "Dilder found — say hi?" Y/N */
-#define STATE_SOCIAL_RECV     15  /* "Dilder says hello!" — say hi back? Y/N */
-#define STATE_SOCIAL_NAME     16  /* reroll picker for your Dilder name */
-#define STATE_SOCIAL_MET      17  /* list of Dilders we've met */
-#define STATE_SOCIAL_NEARBY   18  /* live list of Dilders in range now */
+#define STATE_SOCIAL_PROMPT   14  /* "WetGreg found — say hi?" Y/N */
+#define STATE_SOCIAL_RECV     15  /* "WetGreg says hello!" — say hi back? Y/N */
+#define STATE_SOCIAL_NAME     16  /* reroll picker for your WetGreg name */
+#define STATE_SOCIAL_MET      17  /* list of WetGregs we've met */
+#define STATE_SOCIAL_NEARBY   18  /* live list of WetGregs in range now */
 #define STATE_EMOTE_PICK      19  /* pick an emote to send to g_social_peer */
 #define STATE_EMOTE_PLAY      20  /* octopus acts out g_play_emote, then g_play_next */
 #define STATE_DISPLAY         21  /* Display settings: auto-rotate + orientation */
@@ -250,12 +250,12 @@ static bool ntp_synced = false;
 /* Bluetooth is OFF by default to save power; toggled on in the Bluetooth screen. */
 static bool bt_enabled = false;
 
-/* ── Social UI state (the Dilder a prompt/recv screen is currently about) ── */
+/* ── Social UI state (the WetGreg a prompt/recv screen is currently about) ── */
 static uint16_t g_social_peer      = 0;
 static int8_t   g_social_peer_rssi = 0;
 static uint16_t g_name_seed        = 0;   /* candidate seed on the Set-Name reroll screen */
 
-/* Live "scan nearby" buffer — distinct Dilder ids seen while the screen is open. */
+/* Live "scan nearby" buffer — distinct WetGreg ids seen while the screen is open. */
 #define NEARBY_MAX 8
 static uint16_t g_nearby_id[NEARBY_MAX];
 static int8_t   g_nearby_rssi[NEARBY_MAX];
@@ -312,7 +312,7 @@ static char kb_char_at(int row, int col, bool shift) {
 }
 
 /* ─── SC7A20 accelerometer (I2C0 on GP0/GP1) ───────────────────────────────
- * The Dilder PCB fits an SC7A20HTR — LIS2DH12 / LIS3DH register-compatible,
+ * The WetGreg PCB fits an SC7A20HTR — LIS2DH12 / LIS3DH register-compatible,
  * NOT an MPU-6050. PCB wiring (U1): SDO->GND => I2C addr 0x18, CS->3V3 => I2C
  * mode, INT1->GP15. Differences from the old MPU driver:
  *   - address 0x18 (not 0x68)
@@ -379,7 +379,7 @@ static void mpu_init(void) {
     gpio_pull_up(MPU_SCL);
     sleep_ms(20);  /* SC7A20 boot/turn-on time */
 
-    /* SC7A20 SDO->GND is 0x18 on the Dilder PCB; probe 0x18 then 0x19. */
+    /* SC7A20 SDO->GND is 0x18 on the WetGreg PCB; probe 0x18 then 0x19. */
     uint8_t try_addrs[] = {0x18, 0x19};
     bool found = false;
     for (int a = 0; a < 2; a++) {
@@ -1777,8 +1777,8 @@ static void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
     draw_wifi_icon(0, 1, wifi_connected);
     {
         int soc_x = 18;
-        if (dilder_bt_state() == BT_PAIRED) { draw_bt_icon(18, 1); soc_x = 32; }
-        if (dilder_social_active()) draw_social_icon(soc_x, 1);
+        if (wetgreg_bt_state() == BT_PAIRED) { draw_bt_icon(18, 1); soc_x = 32; }
+        if (wetgreg_social_active()) draw_social_icon(soc_x, 1);
     }
     draw_battery_icon(104, 1);
     {
@@ -2371,16 +2371,16 @@ static void render_text_tall(const char *title, const char *const *lines, int n)
  * near the WiFi connect code). Last flash sector survives reboot + OTA. ─── */
 #define SAVED_MAGIC   0x4D4F5033u    /* 'MOP3' — bumped: added social/identity block */
 #define MAX_SAVED     8
-#define SOCIAL_MAX    16             /* other Dilders remembered in the Social log */
+#define SOCIAL_MAX    16             /* other WetGregs remembered in the Social log */
 #define SAVED_FLASH_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
 typedef struct { char ssid[33]; char pass[64]; } saved_net_t;
 
-/* One remembered peer Dilder. The name is NOT stored — it is derived
- * deterministically from `id` (every Dilder computes the same ridiculous name
+/* One remembered peer WetGreg. The name is NOT stored — it is derived
+ * deterministically from `id` (every WetGreg computes the same ridiculous name
  * for a given id), so the log only needs the id + when we last greeted + how. */
 #define MET_HELLO_SENT  0x01
 #define MET_HELLO_RECV  0x02
-typedef struct { uint16_t id; uint32_t last_day; uint8_t flags; } dilder_met_t;
+typedef struct { uint16_t id; uint32_t last_day; uint8_t flags; } wetgreg_met_t;
 
 /* vsys_cal and the social/identity block are appended at the END; the magic bump
  * forces a clean re-seed so we never read stale layout into the new fields. */
@@ -2388,12 +2388,12 @@ typedef struct {
     uint32_t     magic, count;
     saved_net_t  nets[MAX_SAVED];
     float        vsys_cal;
-    /* ── Dilder identity + social ── */
-    uint16_t     dilder_id;            /* our BLE social id (random, set once) */
-    char         dilder_name[24];      /* custom name; "" → use the auto name */
+    /* ── WetGreg identity + social ── */
+    uint16_t     wetgreg_id;            /* our BLE social id (random, set once) */
+    char         wetgreg_name[24];      /* custom name; "" → use the auto name */
     uint8_t      social_on;            /* persisted opt-in for proximity scanning */
     uint32_t     met_count;
-    dilder_met_t met[SOCIAL_MAX];
+    wetgreg_met_t met[SOCIAL_MAX];
     /* ── Display settings (appended AFTER the social block so old flash images
      * load fine — these read as 0xFF and get sanitised to defaults on load,
      * no SAVED_MAGIC bump needed). ── */
@@ -2403,8 +2403,8 @@ typedef struct {
 static saved_store_t g_saved;
 static const char *saved_find_pass(const char *ssid);   /* fwd (used in handlers) */
 
-/* ─── Ridiculous Dilder name generator ───────────────────────────────────────
- * A Dilder's name is derived purely from its 16-bit id, so EVERY Dilder computes
+/* ─── Ridiculous WetGreg name generator ───────────────────────────────────────
+ * A WetGreg's name is derived purely from its 16-bit id, so EVERY WetGreg computes
  * the same name for a given id without transmitting it. 32×32 = 1024 combos. */
 static const char *k_name_adj[32] = {
     "Soggy","Feral","Greasy","Smug","Moist","Cursed","Spicy","Wobbly",
@@ -2419,14 +2419,14 @@ static const char *k_name_noun[32] = {
     "Blobfish","Chinchilla","Wombat","Gourd","Sphinx","Frog","Capybara","Slug",
 };
 /* Fill `buf` with the deterministic auto-name for `id`. */
-static void dilder_auto_name(uint16_t id, char *buf, size_t n) {
+static void wetgreg_auto_name(uint16_t id, char *buf, size_t n) {
     snprintf(buf, n, "%s %s", k_name_adj[id & 31], k_name_noun[(id >> 5) & 31]);
 }
 /* OUR display name: the custom one if set, else the auto-name for our id. */
-static const char *dilder_display_name(void) {
+static const char *wetgreg_display_name(void) {
     static char nm[24];
-    if (g_saved.dilder_name[0]) return g_saved.dilder_name;
-    dilder_auto_name(g_saved.dilder_id, nm, sizeof(nm));
+    if (g_saved.wetgreg_name[0]) return g_saved.wetgreg_name;
+    wetgreg_auto_name(g_saved.wetgreg_id, nm, sizeof(nm));
     return nm;
 }
 
@@ -2484,11 +2484,11 @@ static void render_bluetooth(void) {
     char line[40];
 
     /* ── Pairing: show the 6-digit passkey big; phone enters it. ── */
-    if (dilder_bt_state() == BT_PAIRING) {
+    if (wetgreg_bt_state() == BT_PAIRING) {
         int y = tall ? 44 : 26, dy = tall ? 20 : 14;
         draw_text(8, y, "ENTER THIS CODE ON", canvas_w); y += dy;
         draw_text(8, y, "YOUR PHONE:", canvas_w); y += dy + dy;
-        snprintf(line, sizeof(line), "%06lu", (unsigned long)dilder_bt_passkey());
+        snprintf(line, sizeof(line), "%06lu", (unsigned long)wetgreg_bt_passkey());
         /* double-size centred passkey */
         int tw = (int)strlen(line) * 16;
         draw_text_2x((canvas_w - tw) / 2, y, line);
@@ -2497,7 +2497,7 @@ static void render_bluetooth(void) {
     }
 
     int y = tall ? 36 : 26, dy = tall ? 18 : 13;
-    draw_text(8, y, "NAME: Dilder Hub", canvas_w); y += dy;
+    draw_text(8, y, "NAME: WetGreg Hub", canvas_w); y += dy;
 
     /* ── Disabled: radio is off to save power. ── */
     if (!bt_enabled) {
@@ -2509,7 +2509,7 @@ static void render_bluetooth(void) {
     }
 
     const char *st;
-    switch (dilder_bt_state()) {
+    switch (wetgreg_bt_state()) {
         case BT_STARTING:    st = "STARTING..."; break;
         case BT_ADVERTISING: st = "DISCOVERABLE"; break;
         case BT_CONNECTED:   st = "CONNECTED"; break;
@@ -2519,23 +2519,23 @@ static void render_bluetooth(void) {
 
     snprintf(line, sizeof(line), "STATUS: %s", st);
     draw_text(8, y, line, canvas_w); y += dy;
-    if (dilder_bt_peer()[0]) {
-        snprintf(line, sizeof(line), "PEER: %s", dilder_bt_peer());
+    if (wetgreg_bt_peer()[0]) {
+        snprintf(line, sizeof(line), "PEER: %s", wetgreg_bt_peer());
         draw_text(8, y, line, canvas_w); y += dy;
     }
     y += dy;
-    if (dilder_bt_state() == BT_PAIRED) {
+    if (wetgreg_bt_state() == BT_PAIRED) {
         draw_text(8, y, "PAIRED! PHONE CAN NOW", canvas_w); y += dy;
         draw_text(8, y, "READ MOOD & STEPS.", canvas_w);
     } else {
-        draw_text(8, y, "FIND \"Dilder Hub\" ON", canvas_w); y += dy;
+        draw_text(8, y, "FIND \"WetGreg Hub\" ON", canvas_w); y += dy;
         draw_text(8, y, "YOUR PHONE & PAIR.", canvas_w);
     }
 
     draw_text(tall ? 6 : 8, tall ? 236 : 110, "C:DISABLE  LEFT:BACK", canvas_w);
 }
 
-/* ─── Emotes (Dilder-to-Dilder expressions) ─────────────────────────────────
+/* ─── Emotes (WetGreg-to-WetGreg expressions) ─────────────────────────────────
  * An emote = a 1-byte code carried in the beacon. Each maps the octopus to a
  * fitting mood/face PLUS an animated overlay glyph, so the octopus stays on
  * screen and "acts out" the emote. Code 0 = none. */
@@ -2633,7 +2633,7 @@ static void render_emote_octopus(uint8_t emote, const char *caption, uint32_t ti
     }
 }
 
-/* ─── Social screens (Dilder-to-Dilder) ─── */
+/* ─── Social screens (WetGreg-to-WetGreg) ─── */
 #define SOCIAL_MENU_COUNT 5
 #define SOC_ITEM_SCAN   0
 #define SOC_ITEM_NEARBY 1
@@ -2649,10 +2649,10 @@ static void render_social_menu(int sel) {
 
     char line[40];
     int y = tall ? 28 : 17, dy = tall ? 17 : 12;
-    snprintf(line, sizeof(line), "ME: %s", dilder_display_name());
+    snprintf(line, sizeof(line), "ME: %s", wetgreg_display_name());
     draw_text(8, y, line, canvas_w); y += dy;
     snprintf(line, sizeof(line), "ID #%04X  MET %lu",
-             g_saved.dilder_id, (unsigned long)g_saved.met_count);
+             g_saved.wetgreg_id, (unsigned long)g_saved.met_count);
     draw_text(8, y, line, canvas_w); y += dy + 2;
 
     const char *items[SOCIAL_MENU_COUNT];
@@ -2660,7 +2660,7 @@ static void render_social_menu(int sel) {
     snprintf(it0, sizeof(it0), "SCAN: %s", g_saved.social_on ? "ON" : "OFF");
     items[SOC_ITEM_SCAN]   = it0;
     items[SOC_ITEM_NEARBY] = "SCAN NEARBY";
-    items[SOC_ITEM_MET]    = "DILDERS MET";
+    items[SOC_ITEM_MET]    = "WETGREGS MET";
     items[SOC_ITEM_NAME]   = "SET NAME";
     items[SOC_ITEM_BACK]   = "BACK";
     for (int i = 0; i < SOCIAL_MENU_COUNT; i++) {
@@ -2671,9 +2671,9 @@ static void render_social_menu(int sel) {
     draw_text(4, tall ? 232 : 108, "U/D  C:SEL  L:BACK", canvas_w);
 }
 
-/* Scrollable list helper shared by "DILDERS MET" and "SCAN NEARBY". `ids`/`rssi`
+/* Scrollable list helper shared by "WETGREGS MET" and "SCAN NEARBY". `ids`/`rssi`
  * hold `count` entries; rssi==NULL hides the dBm column (met list). */
-static void render_dilder_list(const char *title, const uint16_t *ids, const int8_t *rssi,
+static void render_wetgreg_list(const char *title, const uint16_t *ids, const int8_t *rssi,
                                const uint8_t *flags, int count, int sel, const char *empty,
                                const char *foot) {
     bool tall = orientation_is_tall();
@@ -2690,7 +2690,7 @@ static void render_dilder_list(const char *title, const uint16_t *ids, const int
     int y0 = tall ? 30 : 20, dy = tall ? 20 : 13;
     for (int i = 0; i < rows && (top + i) < count; i++) {
         int idx = top + i;
-        char nm[24]; dilder_auto_name(ids[idx], nm, sizeof(nm));
+        char nm[24]; wetgreg_auto_name(ids[idx], nm, sizeof(nm));
         char line[40];
         if (rssi) {
             snprintf(line, sizeof(line), "%s %ddBm", nm, (int)rssi[idx]);
@@ -2713,14 +2713,14 @@ static void render_social_card(bool incoming) {
     bool tall = orientation_is_tall();
     if (tall) set_canvas_tall(); else set_canvas_wide();
     memset(frame, 0, sizeof(frame));
-    char nm[24]; dilder_auto_name(g_social_peer, nm, sizeof(nm));
+    char nm[24]; wetgreg_auto_name(g_social_peer, nm, sizeof(nm));
     char line[40];
     int y = tall ? 24 : 6, dy = tall ? 18 : 12;
     if (incoming) {
-        draw_text(8, y, "ANOTHER DILDER", canvas_w); y += dy;
+        draw_text(8, y, "ANOTHER WETGREG", canvas_w); y += dy;
         draw_text(8, y, "SAYS HELLO!", canvas_w); y += dy + 3;
     } else {
-        draw_text(8, y, "A DILDER APPEARS", canvas_w); y += dy;
+        draw_text(8, y, "A WETGREG APPEARS", canvas_w); y += dy;
         draw_text(8, y, "IN THE WILD!", canvas_w); y += dy + 3;
     }
     draw_text(8, y, nm, canvas_w); y += dy;
@@ -2734,7 +2734,7 @@ static void render_social_name(void) {
     bool tall = orientation_is_tall();
     if (tall) set_canvas_tall(); else set_canvas_wide();
     memset(frame, 0, sizeof(frame));
-    char nm[24]; dilder_auto_name(g_name_seed, nm, sizeof(nm));
+    char nm[24]; wetgreg_auto_name(g_name_seed, nm, sizeof(nm));
     int y = tall ? 24 : 8, dy = tall ? 22 : 18;
     draw_text(8, y, "PICK A NAME:", canvas_w); y += dy + 4;
     draw_text(8, y, nm, canvas_w);
@@ -2748,7 +2748,7 @@ static void render_emote_pick(int sel) {
     memset(frame, 0, sizeof(frame));
     draw_text(tall ? 8 : 24, tall ? 10 : 3, "SEND EMOTE", canvas_w);
     for (int x = 4; x < canvas_w - 4; x++) px_set(x, tall ? 22 : 14);
-    char nm[24]; dilder_auto_name(g_social_peer, nm, sizeof(nm));
+    char nm[24]; wetgreg_auto_name(g_social_peer, nm, sizeof(nm));
     char line[40]; snprintf(line, sizeof(line), "TO: %s", nm);
     int y = tall ? 28 : 18, dy = tall ? 17 : 13;
     draw_text(8, y, line, canvas_w); y += dy + 2;
@@ -2891,7 +2891,7 @@ static void render_info_screen(void) {
         static char L[9][40]; static const char *lp[9]; int n = 0;
         datetime_t t; rtc_get_datetime(&t);
         int h = t.hour % 12; if (h == 0) h = 12;
-        snprintf(L[n], 40, "FW V%s", DILDER_VERSION); lp[n] = L[n]; n++;
+        snprintf(L[n], 40, "FW V%s", WETGREG_VERSION); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "DISP %s", DISPLAY_NAME); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "%s %d %d:%02d%s", month_names[t.month - 1], t.day,
                  h, t.min, t.hour < 12 ? "A" : "P"); lp[n] = L[n]; n++;
@@ -2911,7 +2911,7 @@ static void render_info_screen(void) {
     char buf[48];
     int y = 20;
 
-    snprintf(buf, sizeof(buf), "FW: V%s  %s", DILDER_VERSION, DISPLAY_NAME);
+    snprintf(buf, sizeof(buf), "FW: V%s  %s", WETGREG_VERSION, DISPLAY_NAME);
     draw_text(10, y, buf, IMG_W); y += 11;
 
     snprintf(buf, sizeof(buf), "BUILT: %s %s", __DATE__, __TIME__);
@@ -3570,8 +3570,8 @@ static void saved_seed_defaults(void) {
     strncpy(g_saved.nets[1].ssid, "MoopsterCell",  sizeof(g_saved.nets[1].ssid) - 1);
     strncpy(g_saved.nets[1].pass, WIFI_PASS,       sizeof(g_saved.nets[1].pass) - 1);
     g_saved.vsys_cal = 1.0f;
-    g_saved.dilder_id = 0;            /* 0 → generated in saved_load() */
-    g_saved.dilder_name[0] = '\0';
+    g_saved.wetgreg_id = 0;            /* 0 → generated in saved_load() */
+    g_saved.wetgreg_name[0] = '\0';
     g_saved.social_on = 0;
     g_saved.met_count = 0;
     g_saved.auto_rotate = 1;          /* auto-rotate ON by default */
@@ -3597,9 +3597,9 @@ static void saved_load(void) {
 
     /* Assign a persistent social id on first ever boot (and defend against a
      * zeroed/sanitised field). rng is already seeded before the scheduler. */
-    if (g_saved.dilder_id == 0) {
-        g_saved.dilder_id = (uint16_t)(rng_next() & 0xFFFF);
-        if (g_saved.dilder_id == 0) g_saved.dilder_id = 0x1D1E;   /* never 0 */
+    if (g_saved.wetgreg_id == 0) {
+        g_saved.wetgreg_id = (uint16_t)(rng_next() & 0xFFFF);
+        if (g_saved.wetgreg_id == 0) g_saved.wetgreg_id = 0x1D1E;   /* never 0 */
         if (g_saved.met_count > SOCIAL_MAX) g_saved.met_count = 0;
         saved_write_flash();
     }
@@ -3610,8 +3610,8 @@ static void saved_load(void) {
     if (g_saved.manual_orient > 2) g_saved.manual_orient = OR_TALL;
     g_auto_rotate   = g_saved.auto_rotate ? true : false;
     g_manual_orient = g_saved.manual_orient;
-    printf("[social] this Dilder: id=%04X name=\"%s\"\n",
-           g_saved.dilder_id, dilder_display_name());
+    printf("[social] this WetGreg: id=%04X name=\"%s\"\n",
+           g_saved.wetgreg_id, wetgreg_display_name());
 }
 
 /* Optional LIVE battery-trim nudge (Device-Info UP/DOWN). Not persisted — it
@@ -3622,12 +3622,12 @@ static void battery_cal_save(float cal) {
     g_vsys_cal = cal;
 }
 
-/* ─── Social log (other Dilders we've met) ───────────────────────────────────
+/* ─── Social log (other WetGregs we've met) ───────────────────────────────────
  * Persisted in g_saved.met[]. Names aren't stored (derived from id). */
 
 /* Calendar-day key for the 24 h re-greet cooldown. RTC unset → 0 (still works:
  * a re-greet fires whenever the day key changes). */
-static uint32_t dilder_today(void) {
+static uint32_t wetgreg_today(void) {
     datetime_t t;
     rtc_get_datetime(&t);
     if (t.year < 2020) return 0;
@@ -3657,17 +3657,17 @@ static void met_record(uint16_t id, uint8_t flag, uint32_t day) {
     g_saved.met[idx].last_day = day;
     saved_write_flash();
 }
-/* True if we should auto-prompt for this Dilder today (24 h cooldown). */
+/* True if we should auto-prompt for this WetGreg today (24 h cooldown). */
 static bool met_should_greet(uint16_t id) {
     int idx = met_find(id);
     if (idx < 0) return true;                       /* never met */
-    return g_saved.met[idx].last_day != dilder_today();
+    return g_saved.met[idx].last_day != wetgreg_today();
 }
-static void dilder_set_name(const char *name) {
-    snprintf(g_saved.dilder_name, sizeof(g_saved.dilder_name), "%s", name ? name : "");
+static void wetgreg_set_name(const char *name) {
+    snprintf(g_saved.wetgreg_name, sizeof(g_saved.wetgreg_name), "%s", name ? name : "");
     saved_write_flash();
 }
-static void dilder_set_social(bool on) {
+static void wetgreg_set_social(bool on) {
     g_saved.social_on = on ? 1 : 0;
     saved_write_flash();
 }
@@ -3804,12 +3804,12 @@ static int pick_quote(void) {
 /* Push the current mood + step count to the BLE status characteristic so a
  * paired phone can read/subscribe. No-op (and no notify) when unchanged. */
 static void bt_push_status(void) {
-    if (!dilder_bt_active()) return;
+    if (!wetgreg_bt_active()) return;
     char s[24];
     snprintf(s, sizeof(s), "%s %lu",
              current_mood < 0 ? "ALL" : mood_names[current_mood],
              (unsigned long)steps_today);
-    dilder_bt_set_status(s);
+    wetgreg_bt_set_status(s);
 }
 
 /* ─── Housekeeping sampling (Phase 2) ───────────────────────────────────────
@@ -3854,9 +3854,9 @@ void hk_sample(void) {
          * while charging (it's the biggest continuous radio load), and restore
          * the user's setting when unplugged — so the cell can actually fill. */
         if ((was_usb != 1) && usb) {
-            dilder_social_enable(false);
+            wetgreg_social_enable(false);
         } else if ((was_usb != 0) && !usb) {
-            if (g_saved.social_on) { dilder_social_set_self(g_saved.dilder_id); dilder_social_enable(true); }
+            if (g_saved.social_on) { wetgreg_social_set_self(g_saved.wetgreg_id); wetgreg_social_enable(true); }
         }
         if (usb) {
             /* On USB the rail isn't the battery; show live rail volts, flag -1. */
@@ -3928,8 +3928,8 @@ static TaskHandle_t g_app_task = NULL;
 int main(void) {
     stdio_init_all();
     sleep_ms(50);   /* brief settle; was 1000ms of pure boot delay for USB serial */
-    printf("DILDER HUB v%s (%s) | display: %s | %d quotes | built %s %s\n",
-           DILDER_VERSION, DILDER_VERSION_DATE, DISPLAY_NAME, QUOTE_COUNT, __DATE__, __TIME__);
+    printf("WETGREG HUB v%s (%s) | display: %s | %d quotes | built %s %s\n",
+           WETGREG_VERSION, WETGREG_VERSION_DATE, DISPLAY_NAME, QUOTE_COUNT, __DATE__, __TIME__);
 
     init_rtc_from_compile_time();
 
@@ -4019,12 +4019,12 @@ static void app_task(void *param) {
     saved_load();   /* load cached WiFi networks (seeds Moop Ship + MoopsterCell) */
 
     /* Social: bake our id into the beacon, and resume scanning if it was left on. */
-    dilder_social_set_self(g_saved.dilder_id);
+    wetgreg_social_set_self(g_saved.wetgreg_id);
     if (g_saved.social_on) {
-        if (!dilder_bt_active()) dilder_bt_init();
+        if (!wetgreg_bt_active()) wetgreg_bt_init();
         bt_enabled = true;
-        dilder_social_set_self(g_saved.dilder_id);   /* re-push now that BT is up */
-        dilder_social_enable(true);
+        wetgreg_social_set_self(g_saved.wetgreg_id);   /* re-push now that BT is up */
+        wetgreg_social_enable(true);
     }
 
     /* ─── State machine ─── */
@@ -4082,8 +4082,8 @@ static void app_task(void *param) {
                     draw_wifi_icon(0, 1, wifi_connected);   /* top-left */
                     {
                         int soc_x = 18;
-                        if (dilder_bt_state() == BT_PAIRED) { draw_bt_icon(18, 1); soc_x = 32; }
-                        if (dilder_social_active()) draw_social_icon(soc_x, 1);
+                        if (wetgreg_bt_state() == BT_PAIRED) { draw_bt_icon(18, 1); soc_x = 32; }
+                        if (wetgreg_social_active()) draw_social_icon(soc_x, 1);
                     }
                     draw_battery_icon(234, 1);               /* top-right */
                     {
@@ -4125,17 +4125,17 @@ static void app_task(void *param) {
                  * or we'd fight HK and redraw forever while idle. */
                 if (g_screen_idle != idle0) break;
                 if (s.orientation != o0) { wake_screen(); break; }   /* rotated → user present, redraw */
-                if (dilder_bt_active() && dilder_bt_take_command() >= 0) {
+                if (wetgreg_bt_active() && wetgreg_bt_take_command() >= 0) {
                     qi = pick_quote();   /* phone poked us → fresh quote */
                     speaker_tone(1600, 60);
                     wake_screen(); break;
                 }
-                /* Another Dilder in range? Interrupt the mood cycle. */
+                /* Another WetGreg in range? Interrupt the mood cycle. */
                 if (g_saved.social_on) {
-                    dilder_peer_t pr;
-                    if (dilder_social_poll(&pr)) {
+                    wetgreg_peer_t pr;
+                    if (wetgreg_social_poll(&pr)) {
                         if (pr.hello_to_me) {
-                            met_record(pr.id, MET_HELLO_RECV, dilder_today());
+                            met_record(pr.id, MET_HELLO_RECV, wetgreg_today());
                             g_social_peer = pr.id; g_social_peer_rssi = pr.rssi;
                             g_play_emote = pr.emote ? pr.emote : EMOTE_WAVE;
                             g_play_incoming = true; g_play_next = STATE_SOCIAL_RECV;
@@ -4507,14 +4507,14 @@ static void app_task(void *param) {
 
         /* ════════ BLUETOOTH ════════ */
         case STATE_BLUETOOTH: {
-            if (bt_enabled && !dilder_bt_active()) dilder_bt_init();    /* resume if left on */
+            if (bt_enabled && !wetgreg_bt_active()) wetgreg_bt_init();    /* resume if left on */
             bt_state_t shown = (bt_state_t)255;
             int  was_tall  = orientation_is_tall();
             bool shown_en  = !bt_enabled;     /* mismatch forces the first render */
             for (;;) {
-                if (dilder_bt_state() != shown || orientation_is_tall() != was_tall
+                if (wetgreg_bt_state() != shown || orientation_is_tall() != was_tall
                         || bt_enabled != shown_en) {
-                    shown = dilder_bt_state();
+                    shown = wetgreg_bt_state();
                     was_tall = orientation_is_tall();
                     shown_en = bt_enabled;
                     render_bluetooth();
@@ -4530,12 +4530,12 @@ static void app_task(void *param) {
                 }
                 if (inp == INPUT_CENTER) {
                     bt_enabled = !bt_enabled;
-                    if (bt_enabled) { dilder_bt_init(); speaker_tone(1200, 60); }
+                    if (bt_enabled) { wetgreg_bt_init(); speaker_tone(1200, 60); }
                     else {
                         /* radio OFF → save power; social shares the radio, so stop it too */
-                        if (g_saved.social_on) dilder_set_social(false);
-                        dilder_social_enable(false);
-                        dilder_bt_stop(); speaker_tone(600, 60);
+                        if (g_saved.social_on) wetgreg_set_social(false);
+                        wetgreg_social_enable(false);
+                        wetgreg_bt_stop(); speaker_tone(600, 60);
                     }
                 }
             }
@@ -4555,20 +4555,20 @@ static void app_task(void *param) {
                     switch (social_sel) {
                     case SOC_ITEM_SCAN: {                  /* toggle persistent scanning */
                         bool on = !g_saved.social_on;
-                        dilder_set_social(on);
+                        wetgreg_set_social(on);
                         if (on) {
-                            if (!dilder_bt_active()) dilder_bt_init();
+                            if (!wetgreg_bt_active()) wetgreg_bt_init();
                             bt_enabled = true;
-                            dilder_social_set_self(g_saved.dilder_id);
-                            dilder_social_enable(true);
+                            wetgreg_social_set_self(g_saved.wetgreg_id);
+                            wetgreg_social_enable(true);
                             speaker_tone(1200, 60);
                         } else {
-                            dilder_social_enable(false);
+                            wetgreg_social_enable(false);
                             speaker_tone(600, 60);
                         }
                         break;
                     }
-                    case SOC_ITEM_NEARBY:                  /* live scan for in-range Dilders */
+                    case SOC_ITEM_NEARBY:                  /* live scan for in-range WetGregs */
                         nearby_sel = 0; g_nearby_count = 0;
                         state = STATE_SOCIAL_NEARBY; speaker_tone(1000, 40);
                         break;
@@ -4600,8 +4600,8 @@ static void app_task(void *param) {
                     g_name_seed = (uint16_t)rng_next(); speaker_tone(800, 30); break;
                 }
                 if (inp == INPUT_CENTER) {
-                    char nm[24]; dilder_auto_name(g_name_seed, nm, sizeof(nm));
-                    dilder_set_name(nm); speaker_tone(1400, 80);
+                    char nm[24]; wetgreg_auto_name(g_name_seed, nm, sizeof(nm));
+                    wetgreg_set_name(nm); speaker_tone(1400, 80);
                     state = STATE_SOCIAL; break;
                 }
                 if (inp == INPUT_LEFT) { state = STATE_SOCIAL; speaker_tone(500, 50); break; }
@@ -4609,12 +4609,12 @@ static void app_task(void *param) {
             break;
         }
 
-        /* ════════ DILDERS MET (social log) ════════ */
+        /* ════════ WETGREGS MET (social log) ════════ */
         case STATE_SOCIAL_MET: {
             int n = (int)g_saved.met_count;
             uint16_t ids[SOCIAL_MAX]; uint8_t fl[SOCIAL_MAX];
             for (int i = 0; i < n && i < SOCIAL_MAX; i++) { ids[i] = g_saved.met[i].id; fl[i] = g_saved.met[i].flags; }
-            render_dilder_list("DILDERS MET", ids, NULL, fl, n, met_sel,
+            render_wetgreg_list("WETGREGS MET", ids, NULL, fl, n, met_sel,
                                "NONE YET - TURN ON SCAN", "U/D  L:BACK");
             transpose_to_display();
             display_render();
@@ -4626,18 +4626,18 @@ static void app_task(void *param) {
             break;
         }
 
-        /* ════════ SCAN NEARBY (live, in-range Dilders) ════════ */
+        /* ════════ SCAN NEARBY (live, in-range WetGregs) ════════ */
         case STATE_SOCIAL_NEARBY: {
             /* Make sure scanning is live for the duration of this screen. */
-            if (!dilder_bt_active()) { dilder_bt_init(); bt_enabled = true; }
-            dilder_social_set_self(g_saved.dilder_id);
-            dilder_social_enable(true);
+            if (!wetgreg_bt_active()) { wetgreg_bt_init(); bt_enabled = true; }
+            wetgreg_social_set_self(g_saved.wetgreg_id);
+            wetgreg_social_enable(true);
 
             int last_count = -1, last_sel = -1, last_tall = -1;
             for (;;) {
-                /* Drain freshly-seen Dilders into the nearby list (unique by id). */
-                dilder_peer_t pr;
-                while (dilder_social_poll(&pr)) {
+                /* Drain freshly-seen WetGregs into the nearby list (unique by id). */
+                wetgreg_peer_t pr;
+                while (wetgreg_social_poll(&pr)) {
                     int f = -1;
                     for (int i = 0; i < g_nearby_count; i++) if (g_nearby_id[i] == pr.id) { f = i; break; }
                     if (f >= 0) { g_nearby_rssi[f] = pr.rssi; }
@@ -4653,7 +4653,7 @@ static void app_task(void *param) {
                 int tall_now = orientation_is_tall() ? 1 : 0;
                 if (g_nearby_count != last_count || nearby_sel != last_sel || tall_now != last_tall) {
                     if (nearby_sel >= g_nearby_count) nearby_sel = g_nearby_count ? g_nearby_count - 1 : 0;
-                    render_dilder_list("SCAN NEARBY", g_nearby_id, g_nearby_rssi, NULL,
+                    render_wetgreg_list("SCAN NEARBY", g_nearby_id, g_nearby_rssi, NULL,
                                        g_nearby_count, nearby_sel,
                                        "SCANNING... NONE YET", "C:EMOTE  L:BACK");
                     transpose_to_display();
@@ -4663,7 +4663,7 @@ static void app_task(void *param) {
                 uint8_t inp;
                 if (!ui_get_input(&inp, 300)) continue;   /* keep scanning between presses */
                 if (inp == INPUT_LEFT) {
-                    if (!g_saved.social_on) dilder_social_enable(false);   /* stop scan if not opted-in */
+                    if (!g_saved.social_on) wetgreg_social_enable(false);   /* stop scan if not opted-in */
                     state = STATE_SOCIAL; speaker_tone(500, 50); break;
                 }
                 if (g_nearby_count > 0 && inp == INPUT_UP)   { nearby_sel = (nearby_sel - 1 + g_nearby_count) % g_nearby_count; speaker_tone(600, 30); }
@@ -4671,7 +4671,7 @@ static void app_task(void *param) {
                 if (g_nearby_count > 0 && inp == INPUT_CENTER) {
                     g_social_peer = g_nearby_id[nearby_sel];
                     g_social_peer_rssi = g_nearby_rssi[nearby_sel];
-                    if (!g_saved.social_on) dilder_social_enable(false);  /* stop live scan; advertising stays */
+                    if (!g_saved.social_on) wetgreg_social_enable(false);  /* stop live scan; advertising stays */
                     g_emote_sel = 0; speaker_tone(1000, 50);
                     state = STATE_EMOTE_PICK; break;
                 }
@@ -4679,7 +4679,7 @@ static void app_task(void *param) {
             break;
         }
 
-        /* ════════ "A DILDER APPEARS — SAY HI?" ════════ */
+        /* ════════ "A WETGREG APPEARS — SAY HI?" ════════ */
         case STATE_SOCIAL_PROMPT: {
             render_social_card(false);
             transpose_to_display();
@@ -4701,27 +4701,27 @@ static void app_task(void *param) {
                         g_emote_sel = 0; state = STATE_EMOTE_PICK; speaker_tone(1000, 50); break;
                     }
                     if (inp == INPUT_LEFT) {             /* NO — cooldown today */
-                        met_record(g_social_peer, 0, dilder_today());
+                        met_record(g_social_peer, 0, wetgreg_today());
                         speaker_tone(500, 50); state = STATE_OCTOPUS; wake_screen(); break;
                     }
                 }
-                dilder_peer_t pr;                        /* did THEY greet us first? */
-                if (dilder_social_poll(&pr) && pr.hello_to_me && pr.id == g_social_peer) {
-                    met_record(pr.id, MET_HELLO_RECV, dilder_today());
+                wetgreg_peer_t pr;                        /* did THEY greet us first? */
+                if (wetgreg_social_poll(&pr) && pr.hello_to_me && pr.id == g_social_peer) {
+                    met_record(pr.id, MET_HELLO_RECV, wetgreg_today());
                     g_social_peer_rssi = pr.rssi;
                     g_play_emote = pr.emote ? pr.emote : EMOTE_WAVE;
                     g_play_incoming = true; g_play_next = STATE_SOCIAL_RECV;
                     speaker_tone(1800, 90); state = STATE_EMOTE_PLAY; break;
                 }
                 if ((uint32_t)(to_ms_since_boot(get_absolute_time()) - start) >= 120000) {
-                    met_record(g_social_peer, 0, dilder_today());   /* timed out — cooldown */
+                    met_record(g_social_peer, 0, wetgreg_today());   /* timed out — cooldown */
                     state = STATE_OCTOPUS; wake_screen(); break;
                 }
             }
             break;
         }
 
-        /* ════════ "A DILDER SAYS HELLO!" — RESPOND? ════════ */
+        /* ════════ "A WETGREG SAYS HELLO!" — RESPOND? ════════ */
         case STATE_SOCIAL_RECV: {
             render_social_card(true);
             transpose_to_display();
@@ -4760,8 +4760,8 @@ static void app_task(void *param) {
                 if (inp == INPUT_LEFT) { state = STATE_OCTOPUS; speaker_tone(500, 50); wake_screen(); break; }
                 if (inp == INPUT_CENTER) {
                     uint8_t code = (uint8_t)(g_emote_sel + 1);   /* skip EMOTE_NONE */
-                    dilder_social_send_emote(g_social_peer, code);
-                    met_record(g_social_peer, MET_HELLO_SENT, dilder_today());
+                    wetgreg_social_send_emote(g_social_peer, code);
+                    met_record(g_social_peer, MET_HELLO_SENT, wetgreg_today());
                     g_play_emote = code; g_play_incoming = false; g_play_next = STATE_OCTOPUS;
                     speaker_tone(1600, 80);
                     state = STATE_EMOTE_PLAY; break;
@@ -4772,7 +4772,7 @@ static void app_task(void *param) {
 
         /* ════════ EMOTE PLAYBACK (octopus acts it out) ════════ */
         case STATE_EMOTE_PLAY: {
-            char nm[24]; dilder_auto_name(g_social_peer, nm, sizeof(nm));
+            char nm[24]; wetgreg_auto_name(g_social_peer, nm, sizeof(nm));
             char cap[40];
             if (g_play_incoming) snprintf(cap, sizeof(cap), "%s SENT YOU", nm);
             else                 snprintf(cap, sizeof(cap), "TO %s", nm);

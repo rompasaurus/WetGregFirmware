@@ -10,8 +10,8 @@ once.
 
 | Flavour | Command flag | Produces | When to use |
 |---|---|---|---|
-| **USB** | (default) | `dilder_hub_rtos.uf2` | normal dev loop; flash by USB |
-| **Wi-Fi OTA** | `-DPICOWOTA_OTA=ON` | `picowota_dilder_hub_rtos.uf2` (flash once) + `dilder_hub_rtos.elf` (push over Wi-Fi) | updating a device wirelessly |
+| **USB** | (default) | `wetgreg_hub_rtos.uf2` | normal dev loop; flash by USB |
+| **Wi-Fi OTA** | `-DPICOWOTA_OTA=ON` | `picowota_wetgreg_hub_rtos.uf2` (flash once) + `wetgreg_hub_rtos.elf` (push over Wi-Fi) | updating a device wirelessly |
 
 Both target `-DPICO_BOARD=pico2_w` (the RP2350 + Wi-Fi board) and `-DDISPLAY_VARIANT=V4`.
 
@@ -20,17 +20,17 @@ Both target `-DPICO_BOARD=pico2_w` (the RP2350 + Wi-Fi board) and `-DDISPLAY_VAR
 ## 2. USB build (command line)
 
 ```bash
-cd dev-setup/dilder-hub-rtos
+cd dev-setup/wetgreg-hub-rtos
 mkdir -p build && cd build
 cmake -G Ninja -DPICO_BOARD=pico2_w -DDISPLAY_VARIANT=V4 ..
 ninja
 ```
 
-Output: `build/dilder_hub_rtos.uf2`.
+Output: `build/wetgreg_hub_rtos.uf2`.
 
 Flash it:
 - **Hold BOOTSEL**, plug in USB → a drive named `RP2350` appears → copy the `.uf2` onto it.
-- Or, if current firmware allows: `picotool load -x build/dilder_hub_rtos.uf2`.
+- Or, if current firmware allows: `picotool load -x build/wetgreg_hub_rtos.uf2`.
 
 **Incremental builds:** after the first `cmake`, you only re-run `ninja`. Re-run `cmake`
 only when you add files or change build options. To start clean: `rm -rf build`.
@@ -44,15 +44,15 @@ OTA lets you replace the firmware over Wi-Fi instead of touching USB. It works b
 wirelessly.
 
 ```bash
-cd dev-setup/dilder-hub-rtos
+cd dev-setup/wetgreg-hub-rtos
 mkdir -p build-ota && cd build-ota
 cmake -G Ninja -DPICO_BOARD=pico2_w -DPICOWOTA_OTA=ON -DDISPLAY_VARIANT=V4 \
       -DWIFI_SSID="YourNetwork" -DWIFI_PASS="YourPassword" ..
 ninja
-picotool uf2 convert picowota_dilder_hub_rtos.elf picowota_dilder_hub_rtos.uf2   # if a .uf2 isn't already present
+picotool uf2 convert picowota_wetgreg_hub_rtos.elf picowota_wetgreg_hub_rtos.uf2   # if a .uf2 isn't already present
 ```
 
-First-time install (USB, once): flash `picowota_dilder_hub_rtos.uf2` via BOOTSEL.
+First-time install (USB, once): flash `picowota_wetgreg_hub_rtos.uf2` via BOOTSEL.
 
 Subsequent updates (wireless):
 1. On the device, hold the **joystick UP at power-on** → it enters the OTA bootloader and
@@ -60,12 +60,12 @@ Subsequent updates (wireless):
 2. From your PC, push the standalone app:
    ```bash
    # using the picowota client bundled in tools/devtool, or serial-flash:
-   serial-flash tcp:<device-ip>:4242 build-ota/dilder_hub_rtos.elf
+   serial-flash tcp:<device-ip>:4242 build-ota/wetgreg_hub_rtos.elf
    ```
 3. It reboots into the new firmware.
 
-> **Why two files?** `picowota_dilder_hub_rtos.uf2` is the bootloader+app you install once.
-> `dilder_hub_rtos.elf` (from `build-ota/`, linked at offset `0x1005b000`) is the **payload**
+> **Why two files?** `picowota_wetgreg_hub_rtos.uf2` is the bootloader+app you install once.
+> `wetgreg_hub_rtos.elf` (from `build-ota/`, linked at offset `0x1005b000`) is the **payload**
 > the bootloader accepts over Wi-Fi. A normal `build/` image is linked at `0x10000000` and
 > **cannot** be OTA'd — always push the `build-ota/` ELF.
 
@@ -78,18 +78,18 @@ cd tools/devtool
 python3 devtool.py
 ```
 
-`dilder-hub-rtos` is registered as a selectable variant. Relevant tabs:
+`wetgreg-hub-rtos` is registered as a selectable variant. Relevant tabs:
 
-- **Programs** — select **Dilder Hub RTOS**; it generates `quotes.h` into the folder.
+- **Programs** — select **WetGreg Hub RTOS**; it generates `quotes.h` into the folder.
 - **Picotool** — clean-build + USB-flash the selected firmware (no BOOTSEL button needed if
   the running firmware supports `picotool reboot`).
-- **Pico 2 W OTA** — pick `dilder-hub-rtos` in the firmware tree, enter Wi-Fi creds, click
+- **Pico 2 W OTA** — pick `wetgreg-hub-rtos` in the firmware tree, enter Wi-Fi creds, click
   **Build Bootloader** (now builds the *selected* variant's combined image), flash it once
   over USB, then push updates over Wi-Fi.
 
 The DevTool path constants assume firmware lives at `dev-setup/<name>/`, so
-`dilder-hub-rtos` is auto-discovered; the build/flash/OTA helpers resolve
-`build/dilder_hub_rtos.uf2` and `build-ota/…` automatically.
+`wetgreg-hub-rtos` is auto-discovered; the build/flash/OTA helpers resolve
+`build/wetgreg_hub_rtos.uf2` and `build-ota/…` automatically.
 
 ---
 
@@ -113,11 +113,11 @@ You can confirm a build is sane on your PC even without a Pico:
 
 ```bash
 # correct chip + secure (FreeRTOS-secure-only) image?
-picotool info build/dilder_hub_rtos.elf | grep -E "target chip|image type"
+picotool info build/wetgreg_hub_rtos.elf | grep -E "target chip|image type"
 # how big is it (text=flash code, bss=RAM)?
-arm-none-eabi-size build/dilder_hub_rtos.elf
+arm-none-eabi-size build/wetgreg_hub_rtos.elf
 # did the RTOS actually link in?
-arm-none-eabi-nm build/dilder_hub_rtos.elf | grep -E "vTaskStartScheduler|async_context_freertos"
+arm-none-eabi-nm build/wetgreg_hub_rtos.elf | grep -E "vTaskStartScheduler|async_context_freertos"
 ```
 
 Expect: `target chip: RP2350`, `image type: ARM Secure`, a few hundred KB of text, and the

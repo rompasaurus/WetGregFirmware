@@ -1,5 +1,5 @@
 # ============================================================================
-#  CMakeLists.txt  —  the build recipe for the dilder-hub-rtos firmware
+#  CMakeLists.txt  —  the build recipe for the wetgreg-hub-rtos firmware
 # ============================================================================
 #
 #  WHAT IS CMAKE?
@@ -9,7 +9,7 @@
 #  libraries to link, and HOW, and CMake generates the low-level build files
 #  (we use the Ninja generator) that actually invoke the cross-compiler.
 #
-#  This is the RTOS variant of dilder-hub. Compared to the original it:
+#  This is the RTOS variant of wetgreg-hub. Compared to the original it:
 #    1. Pulls in the FreeRTOS kernel (the RTOS) + its heap_4 allocator.
 #    2. Switches the Wi-Fi/Bluetooth "arch" from the POLLED variant
 #       (pico_cyw43_arch_lwip_poll) to the FreeRTOS variant
@@ -37,7 +37,7 @@ if(NOT DEFINED FREERTOS_KERNEL_PATH AND NOT DEFINED ENV{FREERTOS_KERNEL_PATH})
 endif()
 include(FreeRTOS_Kernel_import.cmake)
 
-project(dilder_hub_rtos C CXX ASM)
+project(wetgreg_hub_rtos C CXX ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -45,8 +45,8 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialise the Pico SDK (sets up the cross-compiler, board headers, etc.).
 pico_sdk_init()
 
-# --- Display variant selection (unchanged from dilder-hub) -------------------
-# The Dilder ships with a WeAct 2.13" V4 panel; other variants kept for parity.
+# --- Display variant selection (unchanged from wetgreg-hub) -------------------
+# The WetGreg ships with a WeAct 2.13" V4 panel; other variants kept for parity.
 if(NOT DEFINED DISPLAY_VARIANT)
     set(DISPLAY_VARIANT "V4")
 endif()
@@ -68,9 +68,9 @@ message(STATUS "Display variant: ${DISPLAY_VARIANT}")
 
 # --- The firmware executable -------------------------------------------------
 # NOTE: through Phase 0/1 the logic still lives in the single main.c (carried
-# over from dilder-hub). Phase 2 splits it into src/rtos, src/drivers, etc., at
+# over from wetgreg-hub). Phase 2 splits it into src/rtos, src/drivers, etc., at
 # which point more .c files get added here.
-add_executable(dilder_hub_rtos
+add_executable(wetgreg_hub_rtos
     main.c
     rtos_tasks.c          # Phase 2: the Input/Display/Housekeeping task orchestration
     freertos_hooks.c      # kernel-required callbacks (idle/timer memory, error hooks)
@@ -80,10 +80,10 @@ add_executable(dilder_hub_rtos
 )
 
 if(EPD_DEFINE)
-    target_compile_definitions(dilder_hub_rtos PRIVATE ${EPD_DEFINE}=1)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE ${EPD_DEFINE}=1)
 endif()
 
-target_include_directories(dilder_hub_rtos PRIVATE
+target_include_directories(wetgreg_hub_rtos PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}            # so #include "FreeRTOSConfig.h" is found
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/Config
@@ -91,7 +91,7 @@ target_include_directories(dilder_hub_rtos PRIVATE
 )
 
 # --- Libraries we link against ----------------------------------------------
-target_link_libraries(dilder_hub_rtos
+target_link_libraries(wetgreg_hub_rtos
     pico_stdlib            # core SDK (GPIO, time, stdio, ...)
     hardware_spi           # e-ink panel bus
     hardware_gpio
@@ -114,39 +114,39 @@ target_link_libraries(dilder_hub_rtos
     pico_cyw43_arch_lwip_sys_freertos
 )
 
-# --- Bluetooth LE (BTstack) — unchanged from dilder-hub ----------------------
-target_compile_definitions(dilder_hub_rtos PRIVATE CYW43_ENABLE_BLUETOOTH=1)
-target_link_libraries(dilder_hub_rtos pico_btstack_ble pico_btstack_cyw43)
-# Generate dilder.h (the GATT database "profile_data") from dilder.gatt.
-pico_btstack_make_gatt_header(dilder_hub_rtos PRIVATE ${CMAKE_CURRENT_LIST_DIR}/dilder.gatt)
+# --- Bluetooth LE (BTstack) — unchanged from wetgreg-hub ----------------------
+target_compile_definitions(wetgreg_hub_rtos PRIVATE CYW43_ENABLE_BLUETOOTH=1)
+target_link_libraries(wetgreg_hub_rtos pico_btstack_ble pico_btstack_cyw43)
+# Generate wetgreg.h (the GATT database "profile_data") from wetgreg.gatt.
+pico_btstack_make_gatt_header(wetgreg_hub_rtos PRIVATE ${CMAKE_CURRENT_LIST_DIR}/wetgreg.gatt)
 
 # --- Wi-Fi credentials (pass via -D or edit wifi_config.h) -------------------
 if(DEFINED WIFI_SSID)
-    target_compile_definitions(dilder_hub_rtos PRIVATE WIFI_SSID="${WIFI_SSID}")
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE WIFI_SSID="${WIFI_SSID}")
 endif()
 if(DEFINED WIFI_PASS)
-    target_compile_definitions(dilder_hub_rtos PRIVATE WIFI_PASS="${WIFI_PASS}")
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE WIFI_PASS="${WIFI_PASS}")
 endif()
 
 # hardware_rtc only exists on RP2040; RP2350 uses a software clock fallback.
 if(PICO_PLATFORM STREQUAL "rp2040")
-    target_link_libraries(dilder_hub_rtos hardware_rtc)
+    target_link_libraries(wetgreg_hub_rtos hardware_rtc)
 endif()
 
 # Console over USB (handy for printf debugging); UART console off.
-pico_enable_stdio_usb(dilder_hub_rtos 1)
-pico_enable_stdio_uart(dilder_hub_rtos 0)
+pico_enable_stdio_usb(wetgreg_hub_rtos 1)
+pico_enable_stdio_uart(wetgreg_hub_rtos 0)
 
 # In an OTA build, picowota_build_combined() produces the output artifacts, so
 # adding the normal extra outputs here too would define them twice (Ninja errors
 # on duplicate outputs). Only add them for the plain USB build.
 if(NOT PICOWOTA_OTA)
-    pico_add_extra_outputs(dilder_hub_rtos)
+    pico_add_extra_outputs(wetgreg_hub_rtos)
 endif()
 
 # --- picowota Wi-Fi OTA bootloader (optional) --------------------------------
 # Enable with: cmake -DPICOWOTA_OTA=ON -DPICO_BOARD=pico2_w -DWIFI_SSID=.. -DWIFI_PASS=.. ..
-# Produces picowota_dilder_hub_rtos.uf2 (flash once over USB) + dilder_hub_rtos.elf
+# Produces picowota_wetgreg_hub_rtos.uf2 (flash once over USB) + wetgreg_hub_rtos.elf
 # (the OTA payload pushed over Wi-Fi). The bootloader is a SEPARATE binary and is
 # unaffected by FreeRTOS (it runs before our scheduler ever starts).
 option(PICOWOTA_OTA "Build the picowota WiFi OTA bootloader + combined image" OFF)
@@ -162,7 +162,7 @@ if(PICOWOTA_OTA)
     endif()
 
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../picowota picowota)
-    target_link_libraries(dilder_hub_rtos picowota_reboot)
-    target_compile_definitions(dilder_hub_rtos PRIVATE PICOWOTA_OTA=1)
-    picowota_build_combined(dilder_hub_rtos)
+    target_link_libraries(wetgreg_hub_rtos picowota_reboot)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE PICOWOTA_OTA=1)
+    picowota_build_combined(wetgreg_hub_rtos)
 endif()

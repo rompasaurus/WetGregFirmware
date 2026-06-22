@@ -24,7 +24,7 @@
  *  flash (code space) and RAM. So FreeRTOS makes you opt in to exactly what you
  *  need. We document each choice so a newcomer understands the trade-off.
  *
- *  THE BIG PICTURE FOR THIS PROJECT (Dilder Hub, RP2350 / Pico 2 W):
+ *  THE BIG PICTURE FOR THIS PROJECT (WetGreg Hub, RP2350 / Pico 2 W):
  *    - The RP2350 has TWO CPU cores. We run FreeRTOS in "SMP" mode (Symmetric
  *      Multi-Processing): one kernel schedules tasks across BOTH cores.
  *    - We pin the slow e-ink display work to core 1 so it can block for ~300 ms
