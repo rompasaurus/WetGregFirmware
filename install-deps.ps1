@@ -221,6 +221,6 @@ Write-Host "══════════════════════�
 Write-Host "  WetGregFirmware setup pass complete"     -ForegroundColor Green
 Write-Host "════════════════════════════════════════"  -ForegroundColor Green
 Write-Host "Flashing tips:"
-Write-Host "  • Plug the Dilder in over USB."
+Write-Host "  • Plug the Wet Greg in over USB."
 Write-Host "  • If picotool is installed, the DevTool reboots the board into BOOTSEL automatically."
 Write-Host "  • Otherwise: hold BOOTSEL, plug in → board mounts as drive 'RP2350' → DevTool copies the .uf2."

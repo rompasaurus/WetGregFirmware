@@ -2803,7 +2803,8 @@ static void render_display_menu(int sel) {
 
 /* ─── Manual date/time setter ─── */
 static datetime_t settime_dt;
-static int settime_field = 0;   /* 0=year 1=month 2=day 3=hour 4=min */
+static int  settime_field   = 0;     /* 0=year 1=month 2=day 3=hour 4=min */
+static bool settime_editing = false; /* false = pick a field, true = adjust its value */
 
 static void render_set_time(void) {
     bool tall = orientation_is_tall();
@@ -2823,16 +2824,18 @@ static void render_set_time(void) {
     int y0 = tall ? 44 : 26, dy = tall ? 22 : 13;
     for (int i = 0; i < 5; i++) {
         int y = y0 + i * dy;
+        bool selected = (i == settime_field);
+        /* Selected field is a steady highlight either way. EDIT mode adds a second
+         * '>' arrow so it's clear U/D now adjusts the value (vs. just picking it). */
+        const char *prefix = selected ? (settime_editing ? ">>" : "> ") : "  ";
         char line[20];
-        if (i == settime_field) {
-            snprintf(line, sizeof(line), "> %s", f[i]);
-            draw_inverted_line(y, line);
-        } else {
-            snprintf(line, sizeof(line), "  %s", f[i]);
-            draw_text(8, y, line, canvas_w);
-        }
+        snprintf(line, sizeof(line), "%s%s", prefix, f[i]);
+        if (selected) draw_inverted_line(y, line);
+        else          draw_text(8, y, line, canvas_w);
     }
-    draw_text(4, tall ? 232 : 108, "U/D ADJ  L/R FIELD  C SAVE", canvas_w);
+    draw_text(4, tall ? 232 : 108,
+              settime_editing ? "U/D ADJUST  C OK  L BACK"
+                              : "U/D FIELD  C EDIT  L BACK", canvas_w);
 }
 
 /* ─── Draw sound submenu ─── */
@@ -4221,6 +4224,7 @@ static void app_task(void *param) {
                         case 5: state = STATE_INFO; break;
                         case MENU_IDX_SET_TIME:
                             rtc_get_datetime(&settime_dt); settime_field = 0;
+                            settime_editing = false;
                             state = STATE_SET_TIME; break;
                         case MENU_IDX_SOCIAL: social_sel = 0; state = STATE_SOCIAL; break;
                         case MENU_IDX_DISPLAY: disp_sel = 0; state = STATE_DISPLAY; break;
@@ -4278,28 +4282,34 @@ static void app_task(void *param) {
             display_render();
 
             POLL_INPUT(4000)
-                if (inp == INPUT_LEFT) {
-                    settime_field = (settime_field + 4) % 5;
-                    speaker_tone(600, 30); break;
-                } else if (inp == INPUT_RIGHT) {
-                    settime_field = (settime_field + 1) % 5;
-                    speaker_tone(600, 30); break;
-                } else if (inp == INPUT_UP || inp == INPUT_DOWN) {
-                    int d = (inp == INPUT_UP) ? 1 : -1;
-                    switch (settime_field) {
-                        case 0: settime_dt.year += d; break;
-                        case 1: settime_dt.month = (settime_dt.month - 1 + 12 + d) % 12 + 1; break;
-                        case 2: settime_dt.day   = (settime_dt.day   - 1 + 31 + d) % 31 + 1; break;
-                        case 3: settime_dt.hour  = (settime_dt.hour  + 24 + d) % 24; break;
-                        case 4: settime_dt.min   = (settime_dt.min   + 60 + d) % 60; break;
+                if (settime_editing) {
+                    /* EDIT: C/L is sel/back — confirm the value and drop to NAV. */
+                    if (inp == INPUT_UP || inp == INPUT_DOWN) {
+                        int d = (inp == INPUT_UP) ? 1 : -1;
+                        switch (settime_field) {
+                            case 0: settime_dt.year += d; break;
+                            case 1: settime_dt.month = (settime_dt.month - 1 + 12 + d) % 12 + 1; break;
+                            case 2: settime_dt.day   = (settime_dt.day   - 1 + 31 + d) % 31 + 1; break;
+                            case 3: settime_dt.hour  = (settime_dt.hour  + 24 + d) % 24; break;
+                            case 4: settime_dt.min   = (settime_dt.min   + 60 + d) % 60; break;
+                        }
+                        speaker_tone(700, 20); break;
                     }
-                    speaker_tone(700, 20); break;
-                } else if (inp == INPUT_CENTER) {
-                    settime_dt.dotw = 0; settime_dt.sec = 0;
-                    rtc_set_datetime(&settime_dt);
-                    ntp_synced = false;        /* manually set */
-                    speaker_tone(1000, 60);
-                    state = STATE_MENU; break;
+                    if (inp == INPUT_CENTER || inp == INPUT_LEFT) {
+                        settime_editing = false; speaker_tone(600, 30); break;
+                    }
+                } else {
+                    /* NAV: U/D pick a field, C edits it, L commits and goes back. */
+                    if (inp == INPUT_UP)   { settime_field = (settime_field + 4) % 5; speaker_tone(600, 30); break; }
+                    if (inp == INPUT_DOWN) { settime_field = (settime_field + 1) % 5; speaker_tone(600, 30); break; }
+                    if (inp == INPUT_CENTER) { settime_editing = true; speaker_tone(900, 40); break; }
+                    if (inp == INPUT_LEFT) {
+                        settime_dt.dotw = 0; settime_dt.sec = 0;
+                        rtc_set_datetime(&settime_dt);
+                        ntp_synced = false;        /* manually set */
+                        speaker_tone(1000, 60);
+                        state = STATE_MENU; break;
+                    }
                 }
             POLL_END
             break;
@@ -4931,7 +4941,12 @@ static void app_task(void *param) {
             transpose_to_display();
             display_render();
 
-            POLL_INPUT(500)  /* fast refresh for live data */
+            /* Live-ish refresh for the accel/step readout. This MUST stay above the
+             * ~0.7 s panel refresh: at 500 ms the menu resubmitted frames faster than
+             * the display could drain, both buffers never went free at once, and the
+             * Input task could never emit a press — so LEFT could never exit and the
+             * device appeared locked. 2 s keeps the data fresh without saturating. */
+            POLL_INPUT(2000)
                 if (inp == INPUT_UP) {
                     mot_sel = (mot_sel - 1 + MOT_MENU_COUNT) % MOT_MENU_COUNT;
                     speaker_tone(600, 20); break;
