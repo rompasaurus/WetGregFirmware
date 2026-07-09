@@ -26,6 +26,8 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"  /* watchdog_reboot — clean restart after factory reset */
+#include "hardware/clocks.h"    /* set_sys_clock_48mhz/_khz — STATE_SLEEP underclock */
+#include "hardware/vreg.h"      /* vreg_set_voltage — STATE_SLEEP core-rail drop */
 /* --- FreeRTOS: the real-time kernel that schedules our tasks across both cores.
  *     FreeRTOS.h MUST come first (it pulls in FreeRTOSConfig.h); task.h adds the
  *     task/scheduler API (xTaskCreate, vTaskStartScheduler, vTaskDelay, ...). --- */
@@ -253,6 +255,7 @@ uint8_t read_joystick(void) {
 #define STATE_ANIM_MENU       24  /* Animations submenu (intro, future animations) */
 #define STATE_SETTINGS        25  /* Settings submenu (network/bt/display/reset) */
 #define STATE_RESET_CONFIRM   26  /* factory reset confirmation card */
+#define STATE_SLEEP           27  /* pseudo-off: Greg asleep, radios off, underclocked */
 
 /* ─── WiFi state ─── */
 static bool wifi_enabled = false;
@@ -553,6 +556,17 @@ static void wake_screen(void) {        /* user is present → unfreeze + redraw 
     g_screen_idle  = false;
     last_motion_ms = to_ms_since_boot(get_absolute_time());
 }
+
+/* ─── Pseudo-off sleep state (STATE_SLEEP) — policy knobs ────────────────────
+ * Greg dozes off (sleep still + radios off + underclock, see power_sleep_enter)
+ * when the device sits MOTIONLESS for SLEEP_IDLE_MS, or immediately when CENTER
+ * is pressed SLEEP_TAP_N times inside SLEEP_TAP_WINDOW_MS. Only CENTER wakes
+ * him. g_power_sleep is the "we are in the low-power hold" flag — Housekeeping
+ * checks it so a USB unplug edge can't re-arm the BLE scan mid-sleep. */
+#define SLEEP_IDLE_MS        (5u * 60u * 1000u)  /* 5 min of stillness */
+#define SLEEP_TAP_N          5                   /* CENTER presses ... */
+#define SLEEP_TAP_WINDOW_MS  5000u               /* ... within 5 s */
+static bool g_power_sleep = false;
 
 /* ─── Orientation → display + input rotation (accelerometer auto-rotate) ───
  * Classifies the in-plane gravity vector into one of 4 holds and, with
@@ -2071,6 +2085,13 @@ static void transpose_to_display(void) {
 void display_grab_into(int idx)   { memcpy(display_buf[idx], ui_buf, sizeof(ui_buf)); }
 void display_blit(int idx)        { EPD_Partial(display_buf[idx]); }
 void display_init_panel(void)     { EPD_Init(); EPD_Clear(); }
+void display_panel_cmd(int cmd) {
+    /* STATE_SLEEP power path. Deep sleep retains the image at ~zero panel
+     * power; waking needs the full hardware-reset + init + clear (the same
+     * clean-base sequence boot uses, so partials after it have no ghosting). */
+    if (cmd == DISP_CMD_SLEEP) { EPD_Sleep(); }
+    else                       { EPD_Init(); EPD_Clear(); }
+}
 
 /* ─── Simple PRNG (seeded from ADC noise) ─── */
 
@@ -2314,6 +2335,140 @@ static void render_intro(uint32_t elapsed, uint32_t frame_idx) {
         /* Current story line in the RIGHT half, big type (wraps to ≤4 rows). */
         intro_draw_story(elapsed, 128, 22, 118);
         draw_text(172, 113, "ANY KEY: EXIT", IMG_W);
+    }
+}
+
+/* ─── Sleep screen (STATE_SLEEP) ─────────────────────────────────────────────
+ * Pseudo-off still (Requirements/Feature_OffStateScreen): Greg asleep in a
+ * cartoon nightcap, Z's rising to the top right, "GREG IS SLEEPING SHHHHH...."
+ * as the title, "PRESS C TO WAKE HIM" at the bottom, bubbles behind like the
+ * boot splash. ONE frame is rendered on entry (per orientation at that moment),
+ * then the panel goes into deep sleep — e-ink holds it at zero power. */
+
+/* A 'Z' from the 5x7 font at an integer scale (raw canvas coords). */
+static void draw_sleep_z(int x0, int y0, int scale) {
+    const uint8_t *g = font5x7[font_index('Z')];
+    for (int row = 0; row < 7; row++)
+        for (int col = 0; col < 5; col++)
+            if (g[row] & (0x10 >> col))
+                for (int dy = 0; dy < scale; dy++)
+                    for (int dx = 0; dx < scale; dx++)
+                        px_set(x0 + col * scale + dx, y0 + row * scale + dy);
+}
+
+/* Pseudo-bold small text: double-struck 1 px apart (no wrap). */
+static void draw_text_bold(int x0, int y0, const char *text) {
+    draw_text(x0,     y0, text, 1000);
+    draw_text(x0 + 1, y0, text, 1000);
+}
+
+/* Old-cartoon nightcap, in body-local coords (px_*_off): a white band rolled
+ * across the dome, a striped cone drooping to the right, pom-pom on the tip.
+ * White-with-black-outline so it reads against the solid-black head. Spans
+ * follow the body silhouette EXPANDED BY 2 (draw_greg_sleeping sets
+ * body_x_expand=2), so the band meets the head edge exactly. */
+static void draw_sleep_cap(void) {
+    /* Band: white roll over the top dome rows. Bottom edge stays black body. */
+    static const uint8_t band[6][3] = {
+        {10,20,50}, {11,16,54}, {12,14,56}, {13,12,58}, {14,11,59}, {15,10,60}
+    };
+    for (int i = 0; i < 6; i++) {
+        int y = band[i][0], x0 = band[i][1], x1 = band[i][2];
+        for (int x = x0; x <= x1; x++) px_clr_off(x, y);
+        px_set_off(x0, y); px_set_off(x0 + 1, y);
+        px_set_off(x1 - 1, y); px_set_off(x1, y);
+    }
+    /* Rolled brim: two black rows separating band and cone. */
+    for (int x = 20; x <= 48; x++) px_set_off(x, 8);
+    for (int x = 21; x <= 47; x++) px_set_off(x, 9);
+    /* Cone: leans right from the brim up to the tip, outlined, white inside. */
+    for (int y = 7; y >= -4; y--) {
+        int d  = 7 - y;                       /* 0 at the brim, 11 at the tip */
+        int xl = 22 + (d * 31) / 11;          /* 22 → 53 */
+        int xr = 46 + (d * 15) / 11;          /* 46 → 61 */
+        for (int x = xl; x <= xr; x++) px_clr_off(x, y);
+        px_set_off(xl, y); px_set_off(xl + 1, y);
+        px_set_off(xr - 1, y); px_set_off(xr, y);
+        if (y == 1 || y == 4)                 /* the classic stripes */
+            for (int x = xl + 2; x <= xr - 2; x++) px_set_off(x, y);
+    }
+    /* Pom-pom on the tip: outlined white ball with a few fluff dots. */
+    for (int dy = -4; dy <= 4; dy++)
+        for (int dx = -4; dx <= 4; dx++) {
+            int d2 = dx * dx + dy * dy;
+            if (d2 <= 16) px_clr_off(58 + dx, -6 + dy);
+            if (d2 <= 16 && d2 >= 10) px_set_off(58 + dx, -6 + dy);
+        }
+    px_set_off(56, -7); px_set_off(59, -6); px_set_off(57, -4);
+}
+
+/* Closed eyes: white sockets mostly lidded over, a white crescent left under
+ * each lash line — the classic peaceful-sleeper look. */
+static void draw_eyes_sleeping(void) {
+    for (int e = 0; e < 2; e++) {
+        int ecx = e ? 48 : 22;
+        for (int dy = -4; dy <= 1; dy++)
+            for (int dx = -4; dx <= 4; dx++)
+                if (dx * dx + dy * dy <= 16)
+                    px_set_off(ecx + dx, 25 + dy);
+    }
+}
+
+/* Greg asleep: relaxed splat (no wobble), lidded eyes, tiny snore mouth, cap. */
+static void draw_greg_sleeping(void) {
+    body_dx = 0; body_dy = 0; body_x_expand = 2;
+    wobble_amp = 0; wobble_freq = 0; wobble_phase = 0;
+    draw_body_transformed();
+    draw_eyes();
+    draw_eyes_sleeping();
+    fill_circle(35, 42, 5, 0);        /* small round snore mouth */
+    draw_sleep_cap();
+    body_x_expand = 0;
+}
+
+/* Blank full canvas rows [y0..y1] — the sleep still wipes the bubble scatter
+ * out of its text bands, so a randomly-placed bubble can't spend the whole nap
+ * tangled in the title (on a STILL that reads as a rendering glitch). */
+static void clear_rows(int y0, int y1) {
+    if (y0 < 0) y0 = 0;
+    if (y1 >= canvas_h) y1 = canvas_h - 1;
+    if (y0 > y1) return;
+    memset(&frame[y0 * canvas_row_bytes], 0, (size_t)(y1 - y0 + 1) * canvas_row_bytes);
+}
+
+static void render_sleep_screen(void) {
+    splash_bubbles_init();            /* fresh scatter each nap */
+    if (orientation_is_tall()) {
+        set_canvas_tall();                       /* 122 x 250 */
+        memset(frame, 0, sizeof(frame));
+        draw_splash_bubbles(3000);               /* frozen mid-drift */
+        clear_rows(0, 53);                       /* keep the text bands clean */
+        clear_rows(234, 249);
+        draw_text_big(20, 6,  "GREG IS", 122);
+        draw_text_big(14, 24, "SLEEPING", 122);
+        draw_text_bold(31, 44, "SHHHHH....");
+        draw_sleep_z(72, 128, 1);                /* Z's rising to the top right */
+        draw_sleep_z(82, 100, 2);
+        draw_sleep_z(92, 64, 3);
+        layout_ox = 26; layout_oy = 140;
+        draw_greg_sleeping();
+        layout_ox = 0; layout_oy = 0;
+        draw_text(4, 238, "PRESS C TO WAKE HIM", 122);
+    } else {
+        set_canvas_wide();                       /* 250 x 122 */
+        memset(frame, 0, sizeof(frame));
+        draw_splash_bubbles(3000);
+        clear_rows(0, 28);                       /* keep the text bands clean */
+        clear_rows(110, 121);
+        draw_text_big(30, 3, "GREG IS SLEEPING", 250);
+        draw_text_bold(96, 20, "SHHHHH....");
+        draw_sleep_z(100, 54, 1);                /* Z's rising to the top right */
+        draw_sleep_z(132, 36, 2);
+        draw_sleep_z(170, 19, 3);
+        layout_ox = 30; layout_oy = 24;
+        draw_greg_sleeping();
+        layout_ox = 0; layout_oy = 0;
+        draw_text(133, 113, "PRESS C TO WAKE HIM", 250);
     }
 }
 
@@ -4245,6 +4400,118 @@ static void wifi_disconnect(void) {
     strncpy(wifi_ip_str, "---", sizeof(wifi_ip_str));
 }
 
+/* ─── Pseudo-off power rails (STATE_SLEEP) ───────────────────────────────────
+ * "As off as we can get without losing the wake button":
+ *   - BLE social scan + advertising stopped, HCI powered OFF (CYW43 BT core dark)
+ *   - WiFi disassociated (the CYW43 chip itself must stay up: GPIO 29 / VSYS
+ *     battery sensing rides its SPI CS line, see wifi_disconnect)
+ *   - e-ink panel in deep sleep (the sleep still is retained at zero power)
+ *   - clk_sys dropped to 48 MHz sourced from PLL_USB and PLL_SYS powered DOWN
+ *     (set_sys_clock_48mhz — USB serial stays alive), core rail 1.10 → 1.00 V
+ * FreeRTOS ticks stretch ~3x while underclocked (each core's SysTick reload was
+ * computed at boot for the full clock) — every task just polls proportionally
+ * slower, which is exactly what we want. The µs timebase (to_ms_since_boot) is
+ * XOSC-derived and stays true, so real-time decisions remain correct.
+ * NOT done (future work, see the Requirements doc): parking core 1, true
+ * dormant/deep-sleep with SC7A20 INT1 wake — those need the display task and
+ * the cyw43 arch to survive, which the current task split doesn't allow. */
+static bool     g_slept_bt   = false;         /* HCI was on at sleep entry */
+static bool     g_slept_wifi = false;         /* WiFi was connected at sleep entry */
+static char     g_slept_ssid[33] = "";
+static uint32_t g_wifi_rejoin_deadline = 0;   /* 0 = no background rejoin in flight */
+
+/* Background WiFi rejoin after wake: async join + cheap polling from the
+ * octopus loop, so waking never blocks ~20 s on DHCP like wifi_connect_to. */
+static void wifi_rejoin_start(const char *ssid) {
+    const char *pass = NULL;
+    for (uint32_t i = 0; i < g_saved.count; i++)
+        if (strcmp(g_saved.nets[i].ssid, ssid) == 0) { pass = g_saved.nets[i].pass; break; }
+    if (!pass) return;                        /* no stored key — Network menu it is */
+    printf("[SLEEP] rejoining \"%s\" in the background\n", ssid);
+    strncpy(wifi_ssid_display, ssid, sizeof(wifi_ssid_display) - 1);
+    wifi_ssid_display[sizeof(wifi_ssid_display) - 1] = '\0';
+    wifi_enabled = true;
+    cyw43_arch_enable_sta_mode();
+    if (cyw43_arch_wifi_connect_async(ssid, pass, pass[0] ? CYW43_AUTH_WPA2_AES_PSK : 0) == 0) {
+        g_wifi_rejoin_deadline = to_ms_since_boot(get_absolute_time()) + 30000;
+    } else {
+        wifi_enabled = false;
+    }
+}
+
+static void wifi_rejoin_poll(void) {
+    static uint32_t last_check = 0;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (now - last_check < 2000) return;      /* ~0.5 Hz is plenty */
+    last_check = now;
+    int ts = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    if (ts == CYW43_LINK_UP) {
+        g_wifi_rejoin_deadline = 0;
+        wifi_connected = true;
+        struct netif *netif = &cyw43_state.netif[CYW43_ITF_STA];
+        snprintf(wifi_ip_str, sizeof(wifi_ip_str), "%s", ipaddr_ntoa(&netif->ip_addr));
+        cyw43_wifi_get_rssi(&cyw43_state, &wifi_rssi);
+        printf("[SLEEP] wifi back: %s\n", wifi_ip_str);
+        ntp_request();
+    } else if (ts < 0 || (int32_t)(now - g_wifi_rejoin_deadline) > 0) {
+        g_wifi_rejoin_deadline = 0;           /* give up quietly; the menu can reconnect */
+        wifi_enabled = false;
+        strncpy(wifi_ssid_display, "---", sizeof(wifi_ssid_display));
+    }
+}
+
+static void power_sleep_enter(void) {
+    printf("[SLEEP] pseudo-off: radios down, panel asleep, 48 MHz\n");
+
+    /* Radios first, while still at full clock. */
+    g_slept_bt = wetgreg_bt_active();
+    wetgreg_social_enable(false);
+    if (g_slept_bt) wetgreg_bt_stop();        /* advertising off + HCI power off */
+    g_slept_wifi = wifi_connected;
+    if (g_slept_wifi)
+        snprintf(g_slept_ssid, sizeof(g_slept_ssid), "%s", wifi_ssid_display);
+    if (wifi_enabled || wifi_connected) wifi_disconnect();
+    g_wifi_rejoin_deadline = 0;               /* cancel any rejoin still in flight */
+
+    /* Let the sleep still reach the glass, then deep-sleep the panel. The
+     * render queue is FIFO, so the command lands strictly after the blit. */
+    rtos_display_cmd(DISP_CMD_SLEEP);
+    while (ui_display_busy()) vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(150));           /* let the sleep cmd itself land */
+
+    g_power_sleep = true;    /* HK: no BLE re-arm on a USB unplug edge mid-sleep */
+
+    /* Underclock LAST. Hold the cyw43 lock so its background task is not
+     * mid-SPI-transaction while clk_sys (the PIO SPI clock source) ramps. */
+    cyw43_thread_enter();
+    set_sys_clock_48mhz();                    /* clk_sys+clk_peri 48 MHz, PLL_SYS off */
+    vreg_set_voltage(VREG_VOLTAGE_1_00);      /* core rail 1.10 → 1.00 V */
+    cyw43_thread_exit();
+}
+
+static void power_sleep_exit(void) {
+    /* Clock back up FIRST — and raise the rail before the frequency. */
+    cyw43_thread_enter();
+    vreg_set_voltage(VREG_VOLTAGE_DEFAULT);
+    busy_wait_us(300);                        /* rail settle (µs-timer, tick-safe) */
+    set_sys_clock_khz(SYS_CLK_KHZ, true);     /* board default (150 MHz on RP2350) */
+    cyw43_thread_exit();
+    g_power_sleep = false;
+
+    /* Panel back: hardware reset + init + full clear (clean base, no ghost of
+     * the sleep still). Queued now, executes before the next rendered frame. */
+    rtos_display_cmd(DISP_CMD_WAKE);
+
+    /* Radios back the way they were. */
+    if (g_slept_bt) wetgreg_bt_init();
+    if (g_saved.social_on) {
+        wetgreg_social_set_self(g_saved.wetgreg_id);
+        wetgreg_social_enable(true);
+    }
+    if (g_slept_wifi) wifi_rejoin_start(g_slept_ssid);
+    printf("[SLEEP] awake: full clock, radios restored\n");
+}
+
 /* ─── Pick a quote matching current_mood, or random if -1 ─── */
 static int pick_quote(void) {
     if (current_mood < 0)
@@ -4317,7 +4584,9 @@ void hk_sample(void) {
         if ((was_usb != 1) && usb) {
             wetgreg_social_enable(false);
         } else if ((was_usb != 0) && !usb) {
-            if (g_saved.social_on) { wetgreg_social_set_self(g_saved.wetgreg_id); wetgreg_social_enable(true); }
+            /* ... but never re-arm the scan while Greg is asleep (STATE_SLEEP
+             * powered the whole HCI off; power_sleep_exit restores it). */
+            if (g_saved.social_on && !g_power_sleep) { wetgreg_social_set_self(g_saved.wetgreg_id); wetgreg_social_enable(true); }
         }
         if (usb) {
             /* On USB the rail isn't the battery; show live rail volts, flag -1. */
@@ -4505,6 +4774,9 @@ static void app_task(void *param) {
     int met_sel = 0;
     int nearby_sel = 0;
 
+    uint32_t tap_t0 = 0;   /* CENTER-mash sleep trigger: window start ... */
+    int      tap_n  = 0;   /* ... and presses seen inside it (see SLEEP_TAP_*) */
+
     /* Sub-screen input: block on the Input task's event queue for up to `ms` ms.
      * The do-while(0) PRESERVES the old `break;` semantics in every screen body —
      * a `break` leaves the poll, then the case's trailing `break` triggers the
@@ -4630,6 +4902,16 @@ static void app_task(void *param) {
                  * or we'd fight HK and redraw forever while idle. */
                 if (g_screen_idle != idle0) break;
                 if (s.orientation != o0) { wake_screen(); break; }   /* rotated → user present, redraw */
+                /* Pseudo-off: no significant motion (and no presses — those
+                 * reset last_motion_ms via wake_screen) for 5 min → Greg dozes
+                 * off. Guarded on mpu_ok twice over: without an accel,
+                 * viewing_update pins last_motion_ms to now anyway. */
+                if (s.mpu_ok &&
+                    to_ms_since_boot(get_absolute_time()) - s.last_motion_ms >= SLEEP_IDLE_MS) {
+                    state = STATE_SLEEP;
+                    break;
+                }
+                if (g_wifi_rejoin_deadline) wifi_rejoin_poll();   /* post-wake async rejoin */
                 if (wetgreg_bt_active() && wetgreg_bt_take_command() >= 0) {
                     qi = pick_quote();   /* phone poked us → fresh quote */
                     speaker_tone(1600, 60);
@@ -4656,9 +4938,51 @@ static void app_task(void *param) {
                 if (got) {
                     wake_screen();                      /* any press = user present */
                     if (inp == INPUT_DOWN)        { state = STATE_MENU; menu_sel = 0; speaker_tone(800, 50); }
-                    else if (inp == INPUT_CENTER) { speaker_tone(1319, 100); }
+                    else if (inp == INPUT_CENTER) {
+                        /* 5 quick CENTER presses → pseudo-off. Presses are
+                         * display-paced (~1 per refresh under a mash), so 5
+                         * land in ~2-3 s of determined mashing — inside the
+                         * 5 s window with room to spare. */
+                        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+                        if (tap_n == 0 || now_ms - tap_t0 > SLEEP_TAP_WINDOW_MS) {
+                            tap_t0 = now_ms; tap_n = 1;
+                        } else if (++tap_n >= SLEEP_TAP_N) {
+                            tap_n = 0;
+                            state = STATE_SLEEP;
+                        }
+                        speaker_tone(1319, 100);
+                    }
                     break;                              /* re-render after a press */
                 }
+            }
+            break;
+        }
+
+        /* ════════ SLEEP / PSEUDO-OFF ════════ */
+        case STATE_SLEEP: {
+            if (!g_power_sleep) {
+                /* Entry: one still — Greg in his nightcap — then power down.
+                 * No animation on purpose: the e-ink holds the image free. */
+                render_sleep_screen();
+                draw_orient_hud();
+                transpose_to_display();
+                display_render();
+                /* Descending "nighty night" chime while still at full clock. */
+                speaker_tone(988, 70); speaker_tone(784, 70); speaker_tone(523, 110);
+                power_sleep_enter();
+                uint8_t drain;                       /* eat any leftover mashing so */
+                while (ui_get_input(&drain, 0)) { }  /* a 6th tap can't insta-wake  */
+            }
+            /* Doze. ONLY CENTER wakes him — motion, other keys, phone pokes and
+             * social sightings are all ignored (the radios are off anyway). */
+            uint8_t inp;
+            if (ui_get_input(&inp, 60000) && inp == INPUT_CENTER) {
+                power_sleep_exit();
+                speaker_tone(784, 60); speaker_tone(1047, 60); speaker_tone(1319, 100);
+                qi = pick_quote();
+                frame_idx = 0;
+                wake_screen();
+                state = STATE_OCTOPUS;
             }
             break;
         }

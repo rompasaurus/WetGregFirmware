@@ -147,10 +147,24 @@ void rtos_snapshot_publish(const sensor_snapshot_t *in);
  * flight (rare — correct throttling, and input keeps flowing via the Input task). */
 void display_render(void);
 
+/* Display-task panel commands — sent through the SAME render queue as frames,
+ * so they execute strictly in-order after any in-flight blit. Values sit far
+ * above the real buffer indices (0/1) so the Display task can tell them apart. */
+#define DISP_CMD_SLEEP  100   /* EPD deep sleep — image retained at ~zero power */
+#define DISP_CMD_WAKE   101   /* EPD hardware reset + re-init + full clear */
+
+/* Queue a DISP_CMD_* for the Display task (used by the STATE_SLEEP power path). */
+void rtos_display_cmd(int cmd);
+
 /* Block until the joystick produces an event, or `timeout_ms` elapses. Returns
  * true and sets *code (an INPUT_* value) on an event; false on timeout. This
  * replaces the old busy-poll: the UI sleeps efficiently instead of spinning. */
 bool ui_get_input(uint8_t *code, uint32_t timeout_ms);
+
+/* True while a frame is in flight to the panel (fewer than both back-buffers
+ * free). The Input task paces presses with this; the STATE_SLEEP power path
+ * uses it to wait for the final still before deep-sleeping the panel. */
+bool ui_display_busy(void);
 
 /* Called from the joystick GPIO interrupt (in main.c) to wake the Input task
  * the instant any joystick line changes. Safe before the task exists (no-op). */
@@ -164,6 +178,7 @@ void    hk_sample(void);                 /* sample sensors + publish snapshot (H
 uint8_t read_joystick(void);             /* read+rotate joystick -> INPUT_* (Input task; already in main.c) */
 void    display_init_panel(void);        /* EPD_Init + EPD_Clear (Display task prologue) */
 void    display_blit(int buf_idx);       /* EPD_Partial(display_buf[idx]) (Display task) */
+void    display_panel_cmd(int cmd);      /* EPD deep-sleep / re-init (Display task; DISP_CMD_*) */
 void    display_grab_into(int buf_idx);  /* copy ui_buf -> display_buf[idx] (UI side) */
 
 #endif /* RTOS_TASKS_H */

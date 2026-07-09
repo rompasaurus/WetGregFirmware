@@ -104,6 +104,13 @@ void display_render(void) {
     xQueueSend(g_render_q, &idx, portMAX_DELAY);   /* Display task takes it from here */
 }
 
+void rtos_display_cmd(int cmd) {
+    /* Rides the render queue so it lands strictly AFTER any queued frame — the
+     * STATE_SLEEP path renders its final still, then queues DISP_CMD_SLEEP. */
+    if (!g_render_q) return;
+    xQueueSend(g_render_q, &cmd, portMAX_DELAY);
+}
+
 bool ui_get_input(uint8_t *code, uint32_t timeout_ms) {
     if (!g_input_q) { vTaskDelay(pdMS_TO_TICKS(timeout_ms)); return false; }
     return xQueueReceive(g_input_q, code, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
@@ -140,6 +147,11 @@ static void display_task(void *arg) {
         int idx;
         /* Sleep here (no CPU burned) until the UI hands us a filled buffer. */
         if (xQueueReceive(g_render_q, &idx, portMAX_DELAY) != pdTRUE) continue;
+        if (idx >= DISP_CMD_SLEEP) {    /* panel command, not a frame — no buffer
+                                         * to return to the free list */
+            display_panel_cmd(idx);     /* main.c: EPD deep-sleep / re-init */
+            continue;
+        }
 #if EPD_TIMING
         TickType_t t0 = xTaskGetTickCount();
         display_blit(idx);              /* main.c: EPD_Partial(display_buf[idx]) — the e-ink waveform */
