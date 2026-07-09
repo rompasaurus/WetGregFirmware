@@ -669,8 +669,9 @@ static const char *mood_names[] = {
     "SAD", "CHAOTIC", "HUNGRY", "TIRED",
     "SLAP HAPPY", "LAZY", "FAT", "CHILL",
     "CREEPY", "EXCITED", "NOSTALGIC", "HOMESICK",
+    "WISE",
 };
-#define MOOD_COUNT 16
+#define MOOD_COUNT 17
 static int current_mood = -1;  /* -1 = all moods (random) */
 
 /* Display variant selection */
@@ -745,6 +746,7 @@ static int current_mood = -1;  /* -1 = all moods (random) */
 #define MOOD_EXCITED   13
 #define MOOD_NOSTALGIC 14
 #define MOOD_HOMESICK  15
+#define MOOD_WISE      16
 
 /* Mouth expressions */
 #define EXPR_SMIRK    0
@@ -765,6 +767,7 @@ static int current_mood = -1;  /* -1 = all moods (random) */
 #define EXPR_EXCITED   15
 #define EXPR_NOSTALGIC 16
 #define EXPR_HOMESICK  17
+#define EXPR_WISE      18
 
 /* Landscape frame buffer (1 = black pixel, packed MSB-first) */
 /* The logical drawing canvas. Two shapes share one buffer:
@@ -1411,6 +1414,45 @@ static void draw_mouth_chill(void) {
     }
 }
 
+/* ─── Wise: silly crossed pupils behind round spectacles, goofy tooth grin ─── */
+static void draw_pupils_wise(void) {
+    /* Slightly crossed and uneven — big brain, zero focus */
+    fill_circle(25, 26, 4, 1);
+    fill_circle(46, 27, 4, 1);
+    fill_circle(23, 24, 1, 0);
+    fill_circle(44, 25, 1, 0);
+}
+
+static void draw_glasses_wise(void) {
+    /* Round spectacle rims as white line-art (radius ~7-8.5 around each
+     * socket) plus a bridge and temple arms — sits clear of the pupils, so it
+     * can draw after them like the brows do. */
+    const int cxs[2] = { 22, 48 }, cy = 25;
+    for (int e = 0; e < 2; e++)
+        for (int dy = -9; dy <= 9; dy++)
+            for (int dx = -9; dx <= 9; dx++) {
+                int d2 = dx * dx + dy * dy;
+                if (d2 > 49 && d2 <= 72) px_clr_off(cxs[e] + dx, cy + dy);
+            }
+    for (int x = 30; x <= 40; x++) { px_clr_off(x, 23); px_clr_off(x, 24); }  /* bridge */
+    for (int x = 10; x <= 13; x++) { px_clr_off(x, 23); px_clr_off(x, 24); }  /* left arm */
+    for (int x = 57; x <= 60; x++) { px_clr_off(x, 23); px_clr_off(x, 24); }  /* right arm */
+}
+
+static void draw_mouth_wise(void) {
+    /* Goofy open grin: white lower half-ellipse with tooth separators */
+    const int cx = 36, cy = 39, rx = 9, ry = 6;
+    for (int dy = 0; dy <= ry; dy++)
+        for (int dx = -rx; dx <= rx; dx++)
+            if (dx * dx * ry * ry + dy * dy * rx * rx <= rx * rx * ry * ry)
+                px_clr_off(cx + dx, cy + dy);
+    for (int dy = 0; dy <= 2; dy++) {
+        px_set_off(cx - 4, cy + dy);
+        px_set_off(cx,     cy + dy);
+        px_set_off(cx + 4, cy + dy);
+    }
+}
+
 /* ─── Creepy: heart-shaped pupils, tongue-out mouth ─── */
 
 static void draw_pupils_creepy(void) {
@@ -1774,6 +1816,11 @@ static void setup_body_transform(uint8_t mood, uint32_t f) {
         case MOOD_HOMESICK:
             body_dy = 1; body_x_expand = -2;
             break;
+        case MOOD_WISE:
+            /* Slow professorial nod + tiny sway, as if mid-lecture */
+            body_dy = (int)sinf(f * 0.5f);
+            body_dx = (int)(1.5f * sinf(f * 0.3f));
+            break;
         default: /* NORMAL: gentle breathing */
             body_dy = (int)sinf(f * 0.8f);
             break;
@@ -1810,6 +1857,7 @@ static void draw_octopus(const Quote *q, int expr, uint32_t frame_idx) {
         case MOOD_EXCITED:  draw_pupils_excited();  break;
         case MOOD_NOSTALGIC: draw_pupils_nostalgic(); break;
         case MOOD_HOMESICK: draw_pupils_homesick(); break;
+        case MOOD_WISE:     draw_pupils_wise();     break;
         default:            draw_pupils_normal();   break;
     }
 
@@ -1820,6 +1868,7 @@ static void draw_octopus(const Quote *q, int expr, uint32_t frame_idx) {
     if (q->mood == MOOD_SLAPHAPPY) draw_eyes_slaphappy();
     if (q->mood == MOOD_LAZY)      draw_lids_lazy();
     if (q->mood == MOOD_HOMESICK)  draw_tears_homesick();
+    if (q->mood == MOOD_WISE)      draw_glasses_wise();
 
     /* 4. Mouth expression (with Y_OFF) */
     switch (expr) {
@@ -2281,6 +2330,7 @@ static const uint8_t cycle_creepy[]     = {EXPR_CREEPY, EXPR_OPEN, EXPR_CREEPY, 
 static const uint8_t cycle_excited[]   = {EXPR_EXCITED, EXPR_OPEN, EXPR_EXCITED, EXPR_SMILE};
 static const uint8_t cycle_nostalgic[] = {EXPR_NOSTALGIC, EXPR_OPEN, EXPR_NOSTALGIC, EXPR_SMILE};
 static const uint8_t cycle_homesick[]  = {EXPR_HOMESICK, EXPR_OPEN, EXPR_HOMESICK, EXPR_HOMESICK};
+static const uint8_t cycle_wise[]      = {EXPR_WISE, EXPR_OPEN, EXPR_WISE, EXPR_SMILE};
 
 static const uint8_t *mood_cycle(uint8_t mood) {
     switch (mood) {
@@ -2299,6 +2349,7 @@ static const uint8_t *mood_cycle(uint8_t mood) {
         case MOOD_EXCITED:   return cycle_excited;
         case MOOD_NOSTALGIC: return cycle_nostalgic;
         case MOOD_HOMESICK:  return cycle_homesick;
+        case MOOD_WISE:      return cycle_wise;
         default:             return cycle_normal;
     }
 }

@@ -24,6 +24,7 @@ section, and a suggested git branch name.
 | [Off-State Screen](Feature_OffStateScreen_Status-Incomplete.md) | Issue #3 | ❌ Incomplete | `feature/off-state-screen` |
 | [Power Switch Extender](Feature_PowerSwitchExtender_Status-Incomplete.md) | Issue #4 | ❌ Incomplete | `feature/power-switch-extender` |
 | [Menu Clarity](Feature_MenuClarity_Status-Incomplete.md) | Issue #5 | ❌ Incomplete | `feature/menu-clarity` |
+| [WISE Mood + Quote Pack](Feature_WiseMood_Status-Complete.md) | Content (2026-07-09) | ✅ Complete | `feature/wise-mood` |
 
 Sources: handwritten notes summarized in [`../Notes/notes-summary.md`](../Notes/notes-summary.md)
 and open GitHub issues at https://github.com/rompasaurus/WetGregFirmware/issues.
