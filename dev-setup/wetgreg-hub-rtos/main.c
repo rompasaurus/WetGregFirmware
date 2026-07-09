@@ -249,6 +249,8 @@ uint8_t read_joystick(void) {
 #define STATE_EMOTE_PLAY      20  /* octopus acts out g_play_emote, then g_play_next */
 #define STATE_DISPLAY         21  /* Display settings: auto-rotate + orientation */
 #define STATE_SPLASH          22  /* one-shot boot splash animation */
+#define STATE_INTRO           23  /* "who is Greg" story animation (Animations menu) */
+#define STATE_ANIM_MENU       24  /* Animations submenu (intro, future animations) */
 #define STATE_SETTINGS        25  /* Settings submenu (network/bt/display/reset) */
 #define STATE_RESET_CONFIRM   26  /* factory reset confirmation card */
 
@@ -823,9 +825,22 @@ static float wobble_amp = 0;
 static float wobble_freq = 0;
 static float wobble_phase = 0;
 
+/* Tentacle swim-kick (intro): a traveling wave down the tentacle rows of the
+ * body art (y >= 55), anchored at the body and growing toward the tips, so the
+ * legs undulate like a swimming octopus. Set per-frame by the intro renderer,
+ * zero everywhere else. */
+static float g_swim_amp = 0;
+static float g_swim_phase = 0;
+
 static int row_wobble(int y) {
-    if (wobble_amp == 0) return 0;
-    return (int)(wobble_amp * sinf(y * wobble_freq + wobble_phase));
+    int w = 0;
+    if (wobble_amp != 0)
+        w = (int)(wobble_amp * sinf(y * wobble_freq + wobble_phase));
+    if (g_swim_amp != 0 && y >= 55) {
+        float depth = (float)(y - 54) / 26.0f;   /* 0 at the body, 1 at the tips */
+        w += (int)(g_swim_amp * depth * sinf(g_swim_phase - (y - 54) * 0.4f));
+    }
+    return w;
 }
 
 /* ─── Pixel helpers ─── */
@@ -1010,6 +1025,19 @@ static void draw_pupils_normal(void) {
     /* White highlights: r²=1 at (20,23) and (46,23) */
     fill_circle(20, 23, 1, 0);
     fill_circle(46, 23, 1, 0);
+}
+
+/* Scriptable gaze (intro animation): normal pupils offset by (dx,dy) inside the
+ * sockets. When g_gaze_override is set, draw_octopus() uses this instead of the
+ * mood's pupils, so a state can direct WHERE Greg looks frame by frame. */
+static bool g_gaze_override = false;
+static int  g_gaze_dx = 0, g_gaze_dy = 0;
+
+static void draw_pupils_gaze(int dx, int dy) {
+    fill_circle(23 + dx, 26 + dy, 4, 1);
+    fill_circle(49 + dx, 26 + dy, 4, 1);
+    fill_circle(20 + dx, 23 + dy, 1, 0);
+    fill_circle(46 + dx, 23 + dy, 1, 0);
 }
 
 static void draw_pupils_weird(void) {
@@ -1617,6 +1645,45 @@ static void draw_text_2x(int x0, int y0, const char *text) {
     }
 }
 
+/* Word-wrapped double-size text: draw_text's wrap logic with draw_text_2x's
+ * 2x2 glyph scaling, on a tighter 12 px advance so real words fit the 122 px
+ * canvas. Used by the intro story. */
+static void draw_text_big(int x0, int y0, const char *text, int max_w) {
+    int cx = x0, cy = y0;
+    const int char_w = 12;              /* 10 px glyph + 2 px gap */
+
+    const char *p = text;
+    while (*p) {
+        int wlen = 0;
+        while (p[wlen] && p[wlen] != ' ') wlen++;
+        int word_px = wlen * char_w;
+
+        if (cx > x0 && (cx - x0) + word_px > max_w) {
+            cx = x0;
+            cy += 18;                   /* 14 px glyph + 4 px line gap */
+        }
+
+        for (int i = 0; i < wlen; i++) {
+            char c = p[i];
+            if (c >= 'a' && c <= 'z') c -= 32;
+            int idx = font_index(c);
+            for (int row = 0; row < 7; row++) {
+                uint8_t bits = font5x7[idx][row];
+                for (int col = 0; col < 5; col++)
+                    if (bits & (0x10 >> col)) {
+                        int px = cx + col * 2, py = cy + row * 2;
+                        px_set(px, py);     px_set(px + 1, py);
+                        px_set(px, py + 1); px_set(px + 1, py + 1);
+                    }
+            }
+            cx += char_w;
+        }
+
+        p += wlen;
+        if (*p == ' ') { cx += char_w; p++; }
+    }
+}
+
 /* ─── Frame composition ─── */
 
 /* ─── RTC clock helpers ─── */
@@ -1725,8 +1792,10 @@ static void draw_octopus(const Quote *q, int expr, uint32_t frame_idx) {
     /* Eyes (white sockets, with Y_OFF) */
     draw_eyes();
 
-    /* Pupils (mood-specific, with Y_OFF) */
-    switch (q->mood) {
+    /* Pupils (mood-specific, with Y_OFF) — a scripted gaze wins over the mood */
+    if (g_gaze_override) {
+        draw_pupils_gaze(g_gaze_dx, g_gaze_dy);
+    } else switch (q->mood) {
         case MOOD_WEIRD:    draw_pupils_weird();    break;
         case MOOD_UNHINGED: draw_pupils_unhinged(); break;
         case MOOD_ANGRY:    draw_pupils_angry();    break;
@@ -2073,6 +2142,124 @@ static void render_splash(uint32_t elapsed, uint32_t frame_idx) {
         /* Title slides in from the right once Greg is in position. */
         if (elapsed >= SPLASH_ENTER_MS)
             draw_text_2x(250 - (int)((250 - 98) * ti), 40, "WET GREG");
+    }
+}
+
+/* ─── Greg intro / tutorial (STATE_INTRO) ────────────────────────────────────
+ * "Who is Greg" story animation (Requirements/Feature_GregIntroTutorial):
+ * a sad, scared Greg drifts in from the bottom (tall) / left (wide) through
+ * rising bubbles, nervously glancing around (up-right → up-left → down-right →
+ * down-left), while the story shows ONE line at a time in big type in the free
+ * half of the screen. After the story he keeps swimming until the hold runs
+ * out; any press exits. Orientation is re-read every frame, like the splash. */
+#define INTRO_ENTER_MS     2500   /* entrance drift */
+#define INTRO_GAZE_T0      1500   /* nervous glance script starts */
+#define INTRO_GAZE_STEP_MS 1200   /* per direction on the scripted first pass */
+#define INTRO_GAZE_SLOW_MS 2600   /* per direction while idle-swimming after */
+#define INTRO_TEXT_T0      2600   /* first story line begins */
+#define INTRO_LINE_MS      5000   /* each line OWNS a 5 s window (one at a time) */
+#define INTRO_CHAR_MS        60   /* typewriter reveal pace within the window */
+#define INTRO_FRAME_MS      450   /* per-frame input wait — above the panel drain */
+#define INTRO_TOTAL_MS    38000   /* text done ~32.6 s + idle swim, then auto-exit */
+
+/* Sad + scared: sad body/brows/mouth; the gaze script replaces the pupils. */
+#define INTRO_MOOD  MOOD_SAD
+#define INTRO_EXPR  EXPR_SAD
+
+/* The story beats — shown ONE at a time in big type so each is readable on
+ * the slow panel (the long first sentence is split into two beats). */
+#define INTRO_NLINES 6
+static const char *intro_lines[INTRO_NLINES] = {
+    "Deep in the Atlantic Ocean...",
+    "Swims a lone octopus...",
+    "His name is Greg...",
+    "He is alone...",
+    "He is far from home.",
+    "And he is WET...",
+};
+
+/* AC3 gaze cycle: up-right → up-left → down-right → down-left (y grows down). */
+static const int8_t intro_gaze_seq[4][2] = { {2,-2}, {-2,-2}, {2,2}, {-2,2} };
+
+/* One story line at a time: line i owns the window [T0 + i*LINE_MS, +LINE_MS),
+ * typing out at the window start; the last line stays up through the hold. */
+static void intro_draw_story(uint32_t elapsed, int tx, int ty, int tw) {
+    if (elapsed < INTRO_TEXT_T0) return;
+    uint32_t li = (elapsed - INTRO_TEXT_T0) / INTRO_LINE_MS;
+    if (li >= INTRO_NLINES) li = INTRO_NLINES - 1;
+    uint32_t t0 = INTRO_TEXT_T0 + li * INTRO_LINE_MS;
+
+    char buf[40];
+    size_t n = (elapsed - t0) / INTRO_CHAR_MS;
+    size_t len = strlen(intro_lines[li]);
+    if (n > len) n = len;
+    memcpy(buf, intro_lines[li], n);
+    buf[n] = '\0';
+    draw_text_big(tx, ty, buf, tw);
+}
+
+static void render_intro(uint32_t elapsed, uint32_t frame_idx) {
+    Quote iq; iq.text = ""; iq.mood = INTRO_MOOD;
+    float in = splash_ease(elapsed, 0, INTRO_ENTER_MS);
+
+    /* Nervous gaze: wide-eyed straight ahead, then the scripted 4-glance pass,
+     * then the same cycle at a slower cadence so he stays uneasy. */
+    g_gaze_dx = 0; g_gaze_dy = 0;
+    if (elapsed >= INTRO_GAZE_T0) {
+        uint32_t g = elapsed - INTRO_GAZE_T0;
+        uint32_t step = g / INTRO_GAZE_STEP_MS;
+        if (step >= 4)
+            step = ((g - 4 * INTRO_GAZE_STEP_MS) / INTRO_GAZE_SLOW_MS) % 4;
+        g_gaze_dx = intro_gaze_seq[step][0];
+        g_gaze_dy = intro_gaze_seq[step][1];
+    }
+
+    /* Gentle swim drift. Body art covers x 6..64, y 22..92 at the layout
+     * origin (Y_OFF included), so the paths below keep him in his half. */
+    float sw = elapsed * 0.001f;
+
+    /* Legs paddle the whole time — tips sweep ±4 px, ~1 stroke per second. */
+    g_swim_amp = 4.0f;
+    g_swim_phase = elapsed * 0.006f;
+
+    if (orientation_is_tall()) {
+        set_canvas_tall();                       /* 122 x 250 */
+        memset(frame, 0, sizeof(frame));
+        draw_splash_bubbles(elapsed);
+
+        /* Swim in the BOTTOM half; the entrance rises from below the edge. */
+        int sx = 23 + (int)(20.0f * sinf(sw * 0.7f));
+        int sy = 132 + (int)(16.0f * sinf(sw * 0.5f + 0.7f));
+        layout_ox = sx;
+        layout_oy = 250 - (int)((250 - sy) * in);
+        g_gaze_override = true;
+        draw_octopus(&iq, INTRO_EXPR, frame_idx);
+        g_gaze_override = false;
+        g_swim_amp = 0;
+        layout_ox = 0; layout_oy = 0;
+
+        /* Current story line in the TOP half, big type (wraps to ≤4 rows). */
+        intro_draw_story(elapsed, 2, 24, 118);
+        draw_text(6, 240, "ANY KEY: EXIT", 122);
+    } else {
+        set_canvas_wide();                       /* 250 x 122 */
+        memset(frame, 0, sizeof(frame));
+        draw_splash_bubbles(elapsed);
+
+        /* Swim in the LEFT half; the entrance drifts in from the left edge. */
+        int sx = 24 + (int)(24.0f * sinf(sw * 0.6f));
+        int sy = 8 + (int)(12.0f * sinf(sw * 0.9f + 1.3f));
+        layout_ox = -80 + (int)((80 + sx) * in);
+        layout_oy = (int)(sy * in);
+        g_gaze_override = true;
+        draw_octopus(&iq, INTRO_EXPR, frame_idx);
+        g_gaze_override = false;
+        g_swim_amp = 0;
+        layout_ox = 0; layout_oy = 0;
+
+        /* Current story line in the RIGHT half, big type (wraps to ≤4 rows). */
+        intro_draw_story(elapsed, 128, 22, 118);
+        draw_text(172, 113, "ANY KEY: EXIT", IMG_W);
     }
 }
 
@@ -2945,6 +3132,28 @@ static void render_display_menu(int sel) {
     /* Hint: ORIENT cycles WIDE → WIDE FLIP → TALL (and locks auto-rotate off). */
     draw_text(8, tall ? 232 : 108,
               sel == DISP_ITEM_ORIENT ? "C:CYCLE  L:BACK" : "C:TOGGLE  L:BACK", canvas_w);
+}
+
+/* ─── Animations submenu (intro story; future animations list here) ─── */
+#define ANIM_MENU_COUNT 2
+#define ANIM_ITEM_INTRO 0
+#define ANIM_ITEM_BACK  1
+static const char *anim_items[ANIM_MENU_COUNT] = { "INTRO", "BACK" };
+
+static void render_anim_menu(int sel) {
+    bool tall = orientation_is_tall();
+    if (tall) set_canvas_tall(); else set_canvas_wide();
+    memset(frame, 0, sizeof(frame));
+    draw_text(tall ? 8 : 30, tall ? 10 : 3, "ANIMATIONS", canvas_w);
+    for (int x = 4; x < canvas_w - 4; x++) px_set(x, tall ? 22 : 14);
+
+    int y = tall ? 34 : 24, dy = tall ? 22 : 14;
+    for (int i = 0; i < ANIM_MENU_COUNT; i++) {
+        int yy = y + i * dy; char l[36];
+        if (i == sel) { snprintf(l, sizeof(l), "> %s", anim_items[i]); draw_inverted_line(yy, l); }
+        else          { snprintf(l, sizeof(l), "  %s", anim_items[i]); draw_text(8, yy, l, canvas_w); }
+    }
+    draw_text(8, tall ? 232 : 108, "C:PLAY  L:BACK", canvas_w);
 }
 
 /* ─── Settings submenu (connectivity + display + time + factory reset) ─── */
@@ -4226,6 +4435,7 @@ static void app_task(void *param) {
     /* ─── State machine ─── */
     uint8_t state = STATE_SPLASH;      /* one-shot boot splash, then STATE_OCTOPUS */
     uint32_t splash_t0 = 0;            /* 0 = splash not started yet */
+    uint32_t intro_t0  = 0;            /* 0 = intro not started (re-armed on exit) */
     uint32_t frame_idx = 0;
     int qi = pick_quote();
     int menu_sel = 0;
@@ -4234,6 +4444,7 @@ static void app_task(void *param) {
     int snd_sel = 0;
     int social_sel = 0;
     int disp_sel = 0;
+    int anim_sel = 0;
     int set_sel = 0;
     int met_sel = 0;
     int nearby_sel = 0;
@@ -4452,6 +4663,7 @@ static void app_task(void *param) {
                     speaker_tone(1000, 40);
                     switch (menu_sel) {
                         case MENU_IDX_MOOD: state = STATE_MOOD_SELECT; mood_sel = current_mood + 1; break;
+                        case MENU_IDX_ANIM: anim_sel = 0; state = STATE_ANIM_MENU; break;
                         case MENU_IDX_SOUND: state = STATE_SOUND; snd_sel = 0; break;
                         case MENU_IDX_MOTION: state = STATE_MOTION; break;
                         case MENU_IDX_INFO: state = STATE_INFO; break;
@@ -4464,6 +4676,62 @@ static void app_task(void *param) {
                 if (inp == INPUT_LEFT) {
                     speaker_tone(500, 40); state = STATE_OCTOPUS; break;
                 }
+            }
+            break;
+        }
+
+        /* ════════ ANIMATIONS SUBMENU ════════ */
+        case STATE_ANIM_MENU: {
+            render_anim_menu(anim_sel);
+            transpose_to_display();
+            display_render();
+            POLL_INPUT(4000)
+                if (inp == INPUT_UP)   { anim_sel = (anim_sel - 1 + ANIM_MENU_COUNT) % ANIM_MENU_COUNT; speaker_tone(600, 30); break; }
+                if (inp == INPUT_DOWN) { anim_sel = (anim_sel + 1) % ANIM_MENU_COUNT; speaker_tone(600, 30); break; }
+                if (inp == INPUT_LEFT) { state = STATE_MENU; speaker_tone(500, 50); break; }
+                if (inp == INPUT_CENTER) {
+                    speaker_tone(1000, 40);
+                    if (anim_sel == ANIM_ITEM_INTRO) {
+                        intro_t0 = 0; frame_idx = 0;
+                        state = STATE_INTRO;
+                    } else {
+                        state = STATE_MENU;
+                    }
+                    break;
+                }
+            POLL_END
+            break;
+        }
+
+        /* ════════ GREG INTRO STORY ANIMATION ════════ */
+        case STATE_INTRO: {
+            if (intro_t0 == 0) {
+                uint32_t t = to_ms_since_boot(get_absolute_time());
+                intro_t0 = t ? t : 1;
+                splash_bubbles_init();
+            }
+            uint32_t elapsed = to_ms_since_boot(get_absolute_time()) - intro_t0;
+
+            bool leave = false;
+            if (elapsed < INTRO_TOTAL_MS) {
+                render_intro(elapsed, frame_idx);
+                draw_orient_hud();
+                transpose_to_display();
+                display_render();
+                frame_idx++;
+                /* Sleep one frame on the input queue — any press exits, and the
+                 * wait keeps the submit cadence above the panel drain so the
+                 * Input task is never starved (same pattern as the splash). */
+                uint8_t inp;
+                leave = ui_get_input(&inp, INTRO_FRAME_MS);
+            }
+            if (leave || elapsed >= INTRO_TOTAL_MS) {
+                if (leave) speaker_tone(1319, 80);
+                intro_t0 = 0;              /* re-arm so the menu can replay it */
+                qi = pick_quote();
+                frame_idx = 0;
+                wake_screen();
+                state = STATE_OCTOPUS;
             }
             break;
         }
