@@ -468,11 +468,16 @@ static float tilt_y_deg(void) {
 }
 
 /* Simple pedometer: detect step when magnitude crosses threshold going up then back down */
+/* Each detected crossing counts as 2 steps. The detector is sampled at ~4 Hz
+ * (orientation_update's 250 ms gate), so at a normal ~2 step/s walking cadence
+ * roughly every other impact falls between samples — measured on-body, the raw
+ * count landed at ~half of actual steps. */
+#define STEP_CAL_FACTOR 2
 static void pedometer_update(void) {
     float mag = accel_magnitude();
     if (!step_above && mag > step_threshold) {
         step_above = true;
-        step_count++;
+        step_count += STEP_CAL_FACTOR;
     } else if (step_above && mag < (step_threshold - 0.3f)) {
         step_above = false;
     }

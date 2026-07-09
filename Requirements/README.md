@@ -25,6 +25,7 @@ section, and a suggested git branch name.
 | [Power Switch Extender](Feature_PowerSwitchExtender_Status-Incomplete.md) | Issue #4 | ❌ Incomplete | `feature/power-switch-extender` |
 | [Menu Clarity](Feature_MenuClarity_Status-Incomplete.md) | Issue #5 | ❌ Incomplete | `feature/menu-clarity` |
 | [WISE Mood + Quote Pack](Feature_WiseMood_Status-Complete.md) | Content (2026-07-09) | ✅ Complete | `feature/wise-mood` |
+| [Pedometer Calibration](Feature_PedometerCalibration_Status-Complete.md) | On-body measurement (2026-07-09) | ✅ Complete | `fix/pedometer-calibration` |
 
 Sources: handwritten notes summarized in [`../Notes/notes-summary.md`](../Notes/notes-summary.md)
 and open GitHub issues at https://github.com/rompasaurus/WetGregFirmware/issues.
