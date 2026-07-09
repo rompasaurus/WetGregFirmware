@@ -177,9 +177,15 @@ void rtos_input_isr_notify(void) {
 
 static void input_task(void *arg) {
     (void)arg;
-    uint8_t    prev     = INPUT_NONE;
+    /* Seed `prev` with the CURRENT stick state, not INPUT_NONE: a key already
+     * down when this task starts (the CENTER hold that just triggered the 10 s
+     * watchdog reboot, or a finger on the stick at power-on) is stale state,
+     * not a press — treating it as an edge injected a phantom event that e.g.
+     * skipped the boot splash. It must be released and re-pressed to count. */
+    uint8_t    prev     = read_joystick();
     uint8_t    pending  = INPUT_NONE;             /* press waiting for the panel to settle */
-    uint32_t   key_down = 0;                      /* ms when the current hold began */
+    uint32_t   key_down = 0;                      /* ms when the current hold began; 0 = the
+                                                   * hold predates this task (no repeats) */
     uint32_t   last_rep = 0;                      /* ms of the last emitted (auto-)repeat */
 #if INPUT_USE_IRQ
     TickType_t wait     = portMAX_DELAY;          /* idle: sleep until an edge interrupt */
@@ -219,7 +225,8 @@ static void input_task(void *arg) {
          * away. UP/DOWN auto-repeat while held; the others are one-shot edges. */
         if (j == INPUT_UP || j == INPUT_DOWN) {
             int edge   = (prev != j);
-            int repeat = !edge && (t - key_down) > INPUT_REPEAT_DELAY_MS
+            int repeat = !edge && key_down != 0
+                                && (t - key_down) > INPUT_REPEAT_DELAY_MS
                                 && (t - last_rep) > INPUT_REPEAT_RATE_MS;
             if (edge)        { key_down = t; pending = j; }
             else if (repeat) { pending = j; }     /* last_rep is set when we actually emit */

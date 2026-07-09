@@ -166,6 +166,12 @@ static volatile input_rotation_t input_rotation = ROT_180;  /* default for the W
 static int display_rotation = 90;
 static int g_orientation = 0;
 
+/* Set once the accel classifier delivers its first post-boot verdict (or the
+ * manual hold is applied). volatile: written by Housekeeping, read by the UI
+ * task — both pinned to core 0, same rule as input_rotation above. The boot
+ * splash holds its first frame on this so it starts in the correct hold. */
+static volatile bool g_orient_primed = false;
+
 /* While calibrating: 1 = log accel/orientation to serial AND draw an on-screen
  * HUD (accel + orientation). Set to 0 once the orientation map is dialed in. */
 #define ORIENT_DEBUG 0
@@ -241,6 +247,7 @@ uint8_t read_joystick(void) {
 #define STATE_EMOTE_PICK      19  /* pick an emote to send to g_social_peer */
 #define STATE_EMOTE_PLAY      20  /* octopus acts out g_play_emote, then g_play_next */
 #define STATE_DISPLAY         21  /* Display settings: auto-rotate + orientation */
+#define STATE_SPLASH          22  /* one-shot boot splash animation */
 
 /* ─── WiFi state ─── */
 static bool wifi_enabled = false;
@@ -545,40 +552,10 @@ static void wake_screen(void) {        /* user is present → unfreeze + redraw 
  * CALIBRATION: the accel-sign → orientation mapping and the input map below
  * are first-pass guesses — confirm each physical hold on the device and adjust.
  * Throttled to ~4 Hz; cheap enough to leave running. */
-static void orientation_update(void) {
-    /* Manual orientation: lock to the user's chosen hold regardless of the
-     * accelerometer (so it works even on a unit with no accel). */
-    if (!g_auto_rotate) {
-        if (g_orientation != (int)g_manual_orient) {
-            g_orientation = (int)g_manual_orient;
-            input_set_rotation(ORIENT_CFG[g_orientation].in_rot);
-        }
-    }
-    if (!mpu_ok) return;
-    static uint32_t last_ms = 0;
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now - last_ms < 250) return;
-    last_ms = now;
-
-    mpu_read_all();
-    pedometer_update();          /* coarse step sampling at this 4 Hz cadence */
-    activity_update(250);        /* daily steps + active-time accrual */
-    if (!g_auto_rotate) return;   /* manual hold: steps counted, skip auto-rotate */
-    float ax = accel_g(accel_x), ay = accel_g(accel_y), az = accel_g(accel_z);
-
-    /* In-plane gravity angle (degrees, 0..360). Measured anchors:
-     *   joystick LEFT  → (X+0.9, Y0.0) → ~0°
-     *   joystick RIGHT → (X0.1, Y+0.8) → ~83° (≈90°)
-     *   joystick BOTTOM (tall) → TODO: read the HUD in that hold and set below. */
-    float ang = atan2f(ay, ax) * 57.2958f;
-    if (ang < 0) ang += 360.0f;
-
-#if ORIENT_DEBUG
-    printf("[ORIENT] ax=%.2f ay=%.2f az=%.2f  ang=%.0f  o=%d tall=%d rot=%d\n",
-           (double)ax, (double)ay, (double)az, (double)ang,
-           g_orientation, orientation_is_tall(), display_rotation);
-#endif
-
+/* Classify the in-plane gravity vector into one of the 3 valid holds, or -1
+ * when indeterminate (device flat, or joystick-above ignore zone). Pure math —
+ * the hysteresis / prime policy lives in orientation_update(). */
+static int orientation_classify(float ax, float ay) {
     /* Anchor angle per orientation — classify to the nearest. CALIBRATE: the
      * landscape two come from your readings; OR_TALL is a guess until you send
      * the joystick-bottom angle. */
@@ -591,15 +568,74 @@ static void orientation_update(void) {
     const float IGNORE_CENTER = 180.0f, IGNORE_HALF = 55.0f;
 
     /* Need enough in-plane gravity to be meaningful (else the device is flat). */
-    if (sqrtf(ax * ax + ay * ay) < 0.35f) return;
+    if (sqrtf(ax * ax + ay * ay) < 0.35f) return -1;
+
+    float ang = atan2f(ay, ax) * 57.2958f;
+    if (ang < 0) ang += 360.0f;
 
     float di = fabsf(ang - IGNORE_CENTER); if (di > 180) di = 360 - di;
-    if (di < IGNORE_HALF) return;                 /* joystick above → ignore */
+    if (di < IGNORE_HALF) return -1;              /* joystick above → ignore */
 
     int o = 0; float best = 1e9f;
     for (int i = 0; i < 3; i++) {
         float d = fabsf(ang - OR_ANGLE[i]); if (d > 180) d = 360 - d;
         if (d < best) { best = d; o = i; }
+    }
+    return o;
+}
+
+static void orientation_update(void) {
+    /* Manual orientation: lock to the user's chosen hold regardless of the
+     * accelerometer (so it works even on a unit with no accel). */
+    if (!g_auto_rotate) {
+        if (g_orientation != (int)g_manual_orient) {
+            g_orientation = (int)g_manual_orient;
+            input_set_rotation(ORIENT_CFG[g_orientation].in_rot);
+        }
+        g_orient_primed = true;
+    }
+    if (!mpu_ok) return;
+    static uint32_t last_ms = 0;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (now - last_ms < 250) return;
+    last_ms = now;
+
+    mpu_read_all();
+    pedometer_update();          /* coarse step sampling at this 4 Hz cadence */
+    activity_update(250);        /* daily steps + active-time accrual */
+    if (!g_auto_rotate) return;   /* manual hold: steps counted, skip auto-rotate */
+    /* In-plane gravity angle (degrees, 0..360). Measured anchors:
+     *   joystick LEFT  → (X+0.9, Y0.0) → ~0°
+     *   joystick RIGHT → (X0.1, Y+0.8) → ~83° (≈90°)
+     *   joystick BOTTOM (tall) → TODO: read the HUD in that hold and set below. */
+    float ax = accel_g(accel_x), ay = accel_g(accel_y), az = accel_g(accel_z);
+
+#if ORIENT_DEBUG
+    {
+        float ang = atan2f(ay, ax) * 57.2958f;
+        if (ang < 0) ang += 360.0f;
+        printf("[ORIENT] ax=%.2f ay=%.2f az=%.2f  ang=%.0f  o=%d tall=%d rot=%d\n",
+               (double)ax, (double)ay, (double)az, (double)ang,
+               g_orientation, orientation_is_tall(), display_rotation);
+    }
+#else
+    (void)az;
+#endif
+
+    int o = orientation_classify(ax, ay);
+    if (o < 0) return;                       /* flat / ignore zone: keep current */
+
+    /* First valid verdict after boot applies IMMEDIATELY — the boot splash
+     * holds its first frame on g_orient_primed, and waiting out the hysteresis
+     * (~1 s at this 4 Hz cadence) would draw it in the wrong hold. Every
+     * later switch still goes through the stable-read filter below. */
+    if (!g_orient_primed) {
+        g_orient_primed = true;
+        if (g_orientation != o) {
+            g_orientation = o;
+            input_set_rotation(ORIENT_CFG[o].in_rot);
+        }
+        return;
     }
 
     /* Hysteresis: require a few stable reads before switching. */
@@ -1929,6 +1965,111 @@ static uint32_t rng_next(void) {
     rng_state ^= rng_state >> 17;
     rng_state ^= rng_state << 5;
     return rng_state;
+}
+
+/* ─── Boot splash (STATE_SPLASH) ─────────────────────────────────────────────
+ * One-shot power-on animation (Requirements/Feature_SplashBootAnimation):
+ *   Phase A 0–2 s    : sassy Greg peeks in (left edge in landscape, bottom in
+ *                      tall) and eases to the default position, bubbles rising.
+ *   Phase B 2–3.5 s  : "WET GREG" title slides in (from the right in landscape,
+ *                      from the top — with an escort bubble — in tall).
+ *   Phase C    –10 s : hold — sassy idle sway, bubbles keep drifting.
+ * Orientation is re-read every frame, so rotating mid-splash re-lays out. */
+#define SPLASH_TOTAL_MS   10000
+#define SPLASH_ENTER_MS    2000
+#define SPLASH_TITLE_MS    1500   /* title slide duration, starts at SPLASH_ENTER_MS */
+#define SPLASH_FRAME_MS     450   /* per-frame input wait — stays above the panel drain */
+
+/* Sassy variant = side-eye pupils (CHILL) + smirk mouth. */
+#define SPLASH_MOOD  MOOD_CHILL
+#define SPLASH_EXPR  EXPR_SMIRK
+
+/* Rising bubbles in 0..255 normalized coords, so an orientation change mid-
+ * splash just rescales them onto the new canvas. */
+#define SPLASH_NBUB 8
+static struct { uint8_t x, y, r, spd; } splash_bub[SPLASH_NBUB];
+
+static void splash_bubbles_init(void) {
+    for (int i = 0; i < SPLASH_NBUB; i++) {
+        splash_bub[i].x   = (uint8_t)(rng_next() & 0xFF);
+        splash_bub[i].y   = (uint8_t)(rng_next() & 0xFF);
+        splash_bub[i].r   = (uint8_t)(2 + rng_next() % 4);     /* 2..5 px */
+        splash_bub[i].spd = (uint8_t)(15 + rng_next() % 26);   /* rise px/s */
+    }
+}
+
+/* Bubble = circle outline with a 1 px glint (raw canvas coords, no layout offset). */
+static void draw_splash_bubble(int cx, int cy, int r) {
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++) {
+            int d2 = dx * dx + dy * dy;
+            if (d2 <= r * r && d2 >= (r - 1) * (r - 1))
+                px_set(cx + dx, cy + dy);
+        }
+    px_clr(cx - (r * 7) / 10, cy - (r * 7) / 10);
+}
+
+static void draw_splash_bubbles(uint32_t elapsed) {
+    for (int i = 0; i < SPLASH_NBUB; i++) {
+        int span = canvas_h + 12;                 /* wrap through a 6 px off-screen band */
+        int y = (splash_bub[i].y * canvas_h) / 256 - (int)((elapsed * splash_bub[i].spd) / 1000);
+        y = ((y % span) + span) % span - 6;
+        int x = (splash_bub[i].x * canvas_w) / 256
+              + (int)(2.5f * sinf(elapsed * 0.004f + i * 1.7f));
+        draw_splash_bubble(x, y, splash_bub[i].r);
+    }
+}
+
+/* Ease-out quadratic 0→1 over `dur` ms once `elapsed` passes `start`, clamped. */
+static float splash_ease(uint32_t elapsed, uint32_t start, uint32_t dur) {
+    if (elapsed <= start) return 0.0f;
+    float p = (float)(elapsed - start) / (float)dur;
+    if (p > 1.0f) p = 1.0f;
+    return 1.0f - (1.0f - p) * (1.0f - p);
+}
+
+static void render_splash(uint32_t elapsed, uint32_t frame_idx) {
+    Quote sq; sq.text = ""; sq.mood = SPLASH_MOOD;
+    float in = splash_ease(elapsed, 0, SPLASH_ENTER_MS);
+    float ti = splash_ease(elapsed, SPLASH_ENTER_MS, SPLASH_TITLE_MS);
+    /* Small vertical bob while sliding — rides on the layout origin so it can't
+     * fight the mood body-transform inside draw_octopus(). */
+    int bob = (in < 1.0f) ? (int)(2.0f * sinf(elapsed * 0.012f)) : 0;
+
+    if (orientation_is_tall()) {
+        set_canvas_tall();                       /* 122 x 250 */
+        memset(frame, 0, sizeof(frame));
+        draw_splash_bubbles(elapsed);
+
+        /* Greg rises from below the bottom edge to the tall layout's spot. */
+        const int OX = (122 - 65) / 2 - 5, OY_END = 113, OY_START = 250;
+        layout_ox = OX;
+        layout_oy = OY_START - (int)((OY_START - OY_END) * in) + bob;
+        draw_octopus(&sq, SPLASH_EXPR, frame_idx);
+        layout_ox = 0; layout_oy = 0;
+
+        /* Title drops in from the top, escorted by a bubble. */
+        if (elapsed >= SPLASH_ENTER_MS) {
+            int wy = -40 + (int)(70.0f * ti);    /* "WET" settles at y=30 */
+            draw_text_2x((122 - 46) / 2, wy, "WET");
+            draw_text_2x((122 - 62) / 2, wy + 18, "GREG");
+            draw_splash_bubble(104, wy + 8, 4);
+        }
+    } else {
+        set_canvas_wide();                       /* 250 x 122 */
+        memset(frame, 0, sizeof(frame));
+        draw_splash_bubbles(elapsed);
+
+        /* Greg peeks in from the left edge and eases to the speech position. */
+        layout_ox = -70 + (int)(70.0f * in);
+        layout_oy = bob;
+        draw_octopus(&sq, SPLASH_EXPR, frame_idx);
+        layout_ox = 0; layout_oy = 0;
+
+        /* Title slides in from the right once Greg is in position. */
+        if (elapsed >= SPLASH_ENTER_MS)
+            draw_text_2x(250 - (int)((250 - 98) * ti), 40, "WET GREG");
+    }
 }
 
 /* ─── Expression cycles per mood ─── */
@@ -4031,7 +4172,8 @@ static void app_task(void *param) {
     }
 
     /* ─── State machine ─── */
-    uint8_t state = STATE_OCTOPUS;
+    uint8_t state = STATE_SPLASH;      /* one-shot boot splash, then STATE_OCTOPUS */
+    uint32_t splash_t0 = 0;            /* 0 = splash not started yet */
     uint32_t frame_idx = 0;
     int qi = pick_quote();
     int menu_sel = 0;
@@ -4063,6 +4205,46 @@ static void app_task(void *param) {
         set_canvas_wide();
 
         switch (state) {
+
+        /* ════════ BOOT SPLASH ════════ */
+        case STATE_SPLASH: {
+            if (splash_t0 == 0) {
+                /* Hold the first frame until the accel classifier's first
+                 * verdict lands (~300 ms; see orientation_update's boot
+                 * prime) — otherwise the splash always STARTS in the default
+                 * landscape hold and flips to portrait mid-entrance. Times
+                 * out fast when no verdict can come (device flat, no accel);
+                 * a press during the wait stays queued and skips on frame 1. */
+                for (int w = 0; !g_orient_primed && w < 14; w++)
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                uint32_t t = to_ms_since_boot(get_absolute_time());
+                splash_t0 = t ? t : 1;
+                splash_bubbles_init();
+            }
+            uint32_t elapsed = to_ms_since_boot(get_absolute_time()) - splash_t0;
+
+            bool skip = false;
+            if (elapsed < SPLASH_TOTAL_MS) {
+                render_splash(elapsed, frame_idx);
+                draw_orient_hud();
+                transpose_to_display();
+                display_render();
+                frame_idx++;
+                /* Sleep one frame on the input queue — any press skips. The wait
+                 * keeps the submit cadence above the panel drain so the Input
+                 * task is never starved (see the STATE_MOTION note). */
+                uint8_t inp;
+                skip = ui_get_input(&inp, SPLASH_FRAME_MS);
+            }
+            if (skip || elapsed >= SPLASH_TOTAL_MS) {
+                if (skip) speaker_tone(1319, 80);
+                qi = pick_quote();
+                frame_idx = 0;
+                wake_screen();
+                state = STATE_OCTOPUS;
+            }
+            break;
+        }
 
         /* ════════ OCTOPUS MAIN SCREEN ════════ */
         case STATE_OCTOPUS: {

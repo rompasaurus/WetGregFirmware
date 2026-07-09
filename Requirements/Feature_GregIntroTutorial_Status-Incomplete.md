@@ -72,4 +72,4 @@
 ## Notes / References
 - Source note images: `Notes/IMG20260709142454.jpg`, `Notes/IMG20260709142700.jpg`
 - Summary: `Notes/notes-summary.md`
-- Related feature: [Splash / Boot Animation](Feature_SplashBootAnimation_Status-Incomplete.md) (share bubble/animation helpers)
+- Related feature: [Splash / Boot Animation](Feature_SplashBootAnimation_Status-Complete.md) (share bubble/animation helpers)
