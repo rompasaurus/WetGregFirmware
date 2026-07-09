@@ -25,6 +25,7 @@
 #include "hardware/i2c.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
+#include "hardware/watchdog.h"  /* watchdog_reboot — clean restart after factory reset */
 /* --- FreeRTOS: the real-time kernel that schedules our tasks across both cores.
  *     FreeRTOS.h MUST come first (it pulls in FreeRTOSConfig.h); task.h adds the
  *     task/scheduler API (xTaskCreate, vTaskStartScheduler, vTaskDelay, ...). --- */
@@ -248,6 +249,8 @@ uint8_t read_joystick(void) {
 #define STATE_EMOTE_PLAY      20  /* octopus acts out g_play_emote, then g_play_next */
 #define STATE_DISPLAY         21  /* Display settings: auto-rotate + orientation */
 #define STATE_SPLASH          22  /* one-shot boot splash animation */
+#define STATE_SETTINGS        25  /* Settings submenu (network/bt/display/reset) */
+#define STATE_RESET_CONFIRM   26  /* factory reset confirmation card */
 
 /* ─── WiFi state ─── */
 static bool wifi_enabled = false;
@@ -1768,6 +1771,7 @@ static void draw_octopus(const Quote *q, int expr, uint32_t frame_idx) {
         case EXPR_EXCITED:   draw_mouth_excited();   break;
         case EXPR_NOSTALGIC: draw_mouth_nostalgic(); break;
         case EXPR_HOMESICK:  draw_mouth_homesick();  break;
+        case EXPR_WISE:      draw_mouth_wise();      break;
         default:             draw_mouth_smirk();     break;
     }
 
@@ -2373,22 +2377,23 @@ static void draw_social_icon(int x0, int y0) {
 /* ─── Menu items ─── */
 static const char *menu_items[] = {
     "MOOD SELECT",
-    "NETWORK",
-    "BLUETOOTH",
+    "ANIMATIONS",
     "SOUND",
     "MOTION",
     "DEVICE INFO",
-    "SET TIME",
     "SOCIAL",
-    "DISPLAY",
+    "SETTINGS",
     "BACK",
 };
-#define MENU_COUNT 10
-#define MENU_IDX_BLUETOOTH 2
-#define MENU_IDX_SET_TIME  6
-#define MENU_IDX_SOCIAL    7
-#define MENU_IDX_DISPLAY   8
-#define MENU_IDX_BACK      9
+#define MENU_COUNT 8
+#define MENU_IDX_MOOD      0
+#define MENU_IDX_ANIM      1
+#define MENU_IDX_SOUND     2
+#define MENU_IDX_MOTION    3
+#define MENU_IDX_INFO      4
+#define MENU_IDX_SOCIAL    5
+#define MENU_IDX_SETTINGS  6
+#define MENU_IDX_BACK      7
 
 /* ─── Helper: draw inverted text (white on black bar) ─── */
 static void draw_inverted_line(int y, const char *text) {
@@ -2940,6 +2945,53 @@ static void render_display_menu(int sel) {
     /* Hint: ORIENT cycles WIDE → WIDE FLIP → TALL (and locks auto-rotate off). */
     draw_text(8, tall ? 232 : 108,
               sel == DISP_ITEM_ORIENT ? "C:CYCLE  L:BACK" : "C:TOGGLE  L:BACK", canvas_w);
+}
+
+/* ─── Settings submenu (connectivity + display + time + factory reset) ─── */
+#define SET_MENU_COUNT 6
+#define SET_ITEM_NETWORK   0
+#define SET_ITEM_BLUETOOTH 1
+#define SET_ITEM_DISPLAY   2
+#define SET_ITEM_SET_TIME  3
+#define SET_ITEM_RESET     4
+#define SET_ITEM_BACK      5
+static const char *set_items[SET_MENU_COUNT] = {
+    "NETWORK", "BLUETOOTH", "DISPLAY", "SET TIME", "RESET WETGREG", "BACK",
+};
+
+static void render_settings_menu(int sel) {
+    bool tall = orientation_is_tall();
+    if (tall) set_canvas_tall(); else set_canvas_wide();
+    memset(frame, 0, sizeof(frame));
+    draw_text(tall ? 8 : 34, tall ? 10 : 3, "SETTINGS", canvas_w);
+    for (int x = 4; x < canvas_w - 4; x++) px_set(x, tall ? 22 : 14);
+
+    int y = tall ? 34 : 22, dy = tall ? 22 : 14;
+    for (int i = 0; i < SET_MENU_COUNT; i++) {
+        int yy = y + i * dy; char l[36];
+        if (i == sel) { snprintf(l, sizeof(l), "> %s", set_items[i]); draw_inverted_line(yy, l); }
+        else          { snprintf(l, sizeof(l), "  %s", set_items[i]); draw_text(8, yy, l, canvas_w); }
+    }
+    draw_text(8, tall ? 232 : 108, "C:SELECT  L:BACK", canvas_w);
+}
+
+/* ─── Factory reset confirmation (Settings → RESET WETGREG) ─── */
+static void render_reset_confirm(void) {
+    bool tall = orientation_is_tall();
+    if (tall) set_canvas_tall(); else set_canvas_wide();
+    memset(frame, 0, sizeof(frame));
+    draw_text(tall ? 8 : 30, tall ? 10 : 3, "RESET WETGREG?", canvas_w);
+    for (int x = 4; x < canvas_w - 4; x++) px_set(x, tall ? 22 : 14);
+
+    /* Lines kept ≤19 chars so nothing wraps on the 122 px tall canvas. */
+    int y = tall ? 40 : 24, dy = tall ? 20 : 13;
+    draw_text(8, y, "ERASES ALL SETTINGS", canvas_w); y += dy;
+    draw_text(8, y, "AND PROGRESS:", canvas_w);       y += dy + (tall ? 6 : 2);
+    draw_text(8, y, "- SAVED WIFI", canvas_w);        y += dy;
+    draw_text(8, y, "- NAME + FRIENDS", canvas_w);    y += dy;
+    draw_text(8, y, "- DISPLAY + SOCIAL", canvas_w);  y += dy;
+    draw_text(8, y, "THEN REBOOTS AS NEW", canvas_w);
+    draw_text(8, tall ? 232 : 108, "C:RESET  L:CANCEL", canvas_w);
 }
 
 /* ─── Manual date/time setter ─── */
@@ -4182,6 +4234,7 @@ static void app_task(void *param) {
     int snd_sel = 0;
     int social_sel = 0;
     int disp_sel = 0;
+    int set_sel = 0;
     int met_sel = 0;
     int nearby_sel = 0;
 
@@ -4398,18 +4451,12 @@ static void app_task(void *param) {
                 if (inp == INPUT_CENTER) {
                     speaker_tone(1000, 40);
                     switch (menu_sel) {
-                        case 0: state = STATE_MOOD_SELECT; mood_sel = current_mood + 1; break;
-                        case 1: state = STATE_NET_MENU; break;
-                        case MENU_IDX_BLUETOOTH: state = STATE_BLUETOOTH; break;
-                        case 3: state = STATE_SOUND; snd_sel = 0; break;
-                        case 4: state = STATE_MOTION; break;
-                        case 5: state = STATE_INFO; break;
-                        case MENU_IDX_SET_TIME:
-                            rtc_get_datetime(&settime_dt); settime_field = 0;
-                            settime_editing = false;
-                            state = STATE_SET_TIME; break;
+                        case MENU_IDX_MOOD: state = STATE_MOOD_SELECT; mood_sel = current_mood + 1; break;
+                        case MENU_IDX_SOUND: state = STATE_SOUND; snd_sel = 0; break;
+                        case MENU_IDX_MOTION: state = STATE_MOTION; break;
+                        case MENU_IDX_INFO: state = STATE_INFO; break;
                         case MENU_IDX_SOCIAL: social_sel = 0; state = STATE_SOCIAL; break;
-                        case MENU_IDX_DISPLAY: disp_sel = 0; state = STATE_DISPLAY; break;
+                        case MENU_IDX_SETTINGS: set_sel = 0; state = STATE_SETTINGS; break;
                         default: state = STATE_OCTOPUS; break;
                     }
                     break;
@@ -4418,6 +4465,57 @@ static void app_task(void *param) {
                     speaker_tone(500, 40); state = STATE_OCTOPUS; break;
                 }
             }
+            break;
+        }
+
+        /* ════════ SETTINGS SUBMENU ════════ */
+        case STATE_SETTINGS: {
+            render_settings_menu(set_sel);
+            transpose_to_display();
+            display_render();
+            POLL_INPUT(4000)
+                if (inp == INPUT_UP)   { set_sel = (set_sel - 1 + SET_MENU_COUNT) % SET_MENU_COUNT; speaker_tone(600, 30); break; }
+                if (inp == INPUT_DOWN) { set_sel = (set_sel + 1) % SET_MENU_COUNT; speaker_tone(600, 30); break; }
+                if (inp == INPUT_LEFT) { state = STATE_MENU; speaker_tone(500, 50); break; }
+                if (inp == INPUT_CENTER) {
+                    speaker_tone(1000, 40);
+                    switch (set_sel) {
+                        case SET_ITEM_NETWORK:   state = STATE_NET_MENU; break;
+                        case SET_ITEM_BLUETOOTH: state = STATE_BLUETOOTH; break;
+                        case SET_ITEM_DISPLAY:   disp_sel = 0; state = STATE_DISPLAY; break;
+                        case SET_ITEM_SET_TIME:
+                            rtc_get_datetime(&settime_dt); settime_field = 0;
+                            settime_editing = false;
+                            state = STATE_SET_TIME; break;
+                        case SET_ITEM_RESET:     state = STATE_RESET_CONFIRM; break;
+                        default:                 state = STATE_MENU; break;
+                    }
+                    break;
+                }
+            POLL_END
+            break;
+        }
+
+        /* ════════ FACTORY RESET CONFIRMATION ════════ */
+        case STATE_RESET_CONFIRM: {
+            render_reset_confirm();
+            transpose_to_display();
+            display_render();
+            POLL_INPUT(4000)
+                if (inp == INPUT_LEFT) { state = STATE_SETTINGS; speaker_tone(500, 50); break; }
+                if (inp == INPUT_CENTER) {
+                    /* Re-seed the factory defaults (wetgreg_id 0 → a fresh
+                     * identity is generated on the next boot) and persist, then
+                     * reboot so every RAM-side setting (mood, steps, trims)
+                     * starts over and the boot splash greets the "new" Greg. */
+                    speaker_tone(400, 300);
+                    saved_seed_defaults();
+                    saved_write_flash();
+                    vTaskDelay(pdMS_TO_TICKS(400));   /* let the tone land */
+                    watchdog_reboot(0, 0, 0);
+                    for (;;) vTaskDelay(pdMS_TO_TICKS(100));   /* await reboot */
+                }
+            POLL_END
             break;
         }
 
@@ -4430,7 +4528,7 @@ static void app_task(void *param) {
             POLL_INPUT(4000)
                 if (inp == INPUT_UP)   { disp_sel = (disp_sel - 1 + DISP_MENU_COUNT) % DISP_MENU_COUNT; speaker_tone(600, 30); break; }
                 if (inp == INPUT_DOWN) { disp_sel = (disp_sel + 1) % DISP_MENU_COUNT; speaker_tone(600, 30); break; }
-                if (inp == INPUT_LEFT) { state = STATE_MENU; speaker_tone(500, 50); break; }
+                if (inp == INPUT_LEFT) { state = STATE_SETTINGS; speaker_tone(500, 50); break; }
                 if (inp == INPUT_CENTER) {
                     if (disp_sel == DISP_ITEM_AUTO) {
                         /* Toggle auto-rotate. Turning it OFF locks to the current hold. */
@@ -4446,7 +4544,7 @@ static void app_task(void *param) {
                         input_set_rotation(ORIENT_CFG[g_orientation].in_rot);
                         speaker_tone(1200, 50);
                     } else {
-                        state = STATE_MENU; speaker_tone(500, 50); break;
+                        state = STATE_SETTINGS; speaker_tone(500, 50); break;
                     }
                     /* Persist the display settings. */
                     g_saved.auto_rotate = g_auto_rotate ? 1 : 0;
@@ -4490,7 +4588,7 @@ static void app_task(void *param) {
                         rtc_set_datetime(&settime_dt);
                         ntp_synced = false;        /* manually set */
                         speaker_tone(1000, 60);
-                        state = STATE_MENU; break;
+                        state = STATE_SETTINGS; break;
                     }
                 }
             POLL_END
@@ -4643,7 +4741,7 @@ static void app_task(void *param) {
                     speaker_tone(600, 30); break;
                 }
                 if (inp == INPUT_LEFT) {
-                    state = STATE_MENU;
+                    state = STATE_SETTINGS;
                     speaker_tone(500, 50); break;
                 }
                 if (inp == INPUT_CENTER) {
@@ -4661,7 +4759,7 @@ static void app_task(void *param) {
                         case NET_ITEM_STATUS:
                             state = STATE_NETWORK; break;
                         case NET_ITEM_BACK:
-                            state = STATE_MENU; break;
+                            state = STATE_SETTINGS; break;
                     }
                     break;
                 }
@@ -4718,7 +4816,7 @@ static void app_task(void *param) {
                 uint8_t inp;
                 if (!ui_get_input(&inp, 250)) continue;   /* timeout → re-check state */
                 if (inp == INPUT_LEFT) {
-                    speaker_tone(500, 40); state = STATE_MENU; break;
+                    speaker_tone(500, 40); state = STATE_SETTINGS; break;
                 }
                 if (inp == INPUT_CENTER) {
                     bt_enabled = !bt_enabled;
