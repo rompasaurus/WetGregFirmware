@@ -54,12 +54,14 @@
 #define INPUT_TASK_PRIO    (tskIDLE_PRIORITY + 3)   /* highest */
 #define DISPLAY_TASK_PRIO  (tskIDLE_PRIORITY + 2)
 #define HK_TASK_PRIO       (tskIDLE_PRIORITY + 1)   /* lowest */
+#define BATT_TASK_PRIO     (tskIDLE_PRIORITY + 1)   /* lowest — may block on the cyw43 lock */
 
 /*  Stacks: starting estimates; trimmed in Phase 3 via uxTaskGetStackHighWater
  *  Mark(). UI is biggest (deep render/snprintf chain). */
 #define INPUT_TASK_STACK    512
 #define DISPLAY_TASK_STACK  2048   /* the EPD driver + SPI push call chain */
-#define HK_TASK_STACK       2048   /* accel maths + battery ADC */
+#define HK_TASK_STACK       2048   /* accel maths + orientation/step detection */
+#define BATT_TASK_STACK     1024   /* VSYS ADC burst + trimmed-mean sort + snprintf log */
 
 /* Input acquisition mode:
  *   0 = POLLING (Phase 2, proven) — the Input task samples the joystick every
@@ -174,7 +176,8 @@ void rtos_input_isr_notify(void);
  *  Hooks the tasks call back into main.c (defined there, declared here so
  *  rtos_tasks.c stays free of hardware/driver details)
  * ------------------------------------------------------------------------- */
-void    hk_sample(void);                 /* sample sensors + publish snapshot (Housekeeping) */
+void    hk_sample(void);                 /* sample accel/orientation/steps + publish snapshot (Housekeeping) */
+void    batt_sample(void);               /* sample battery/USB via the cyw43-locked ADC (Battery task) */
 uint8_t read_joystick(void);             /* read+rotate joystick -> INPUT_* (Input task; already in main.c) */
 void    display_init_panel(void);        /* EPD_Init + EPD_Clear (Display task prologue) */
 void    display_blit(int buf_idx);       /* EPD_Partial(display_buf[idx]) (Display task) */

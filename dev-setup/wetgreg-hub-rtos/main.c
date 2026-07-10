@@ -4593,89 +4593,100 @@ static void bt_push_status(void) {
     wetgreg_bt_set_status(s);
 }
 
+/* ─── Battery + USB sampling — runs in its OWN task, NOT the accel loop ──────
+ * read_vsys_volts() and is_usb_powered() both grab the cyw43 lock (GP29 is the
+ * shared CYW43 SPI clock / VBUS sense line). This used to live inside hk_sample,
+ * so every 250 ms the LOWEST-priority Housekeeping task blocked on that lock
+ * behind the radio's background task — which stretched the whole HK loop and
+ * dropped the 20 Hz accel sampling that makes auto-rotate feel instant. The
+ * giveaway: after a wake auto-rotate was snappy for exactly the g_radio_settle
+ * window (battery reads paused via the gate below), then went sluggish again the
+ * instant the reads resumed. Splitting the battery read into batt_task lets HK
+ * sample the accel at a rock-steady 20 Hz (pure I2C, no cyw43 lock) while the
+ * battery block does its lock-taking on a task of its own — a stall there only
+ * delays the gauge, never the rotation. Values land in g_batt_pct/g_batt_v/
+ * g_on_usb (volatile, single-writer) that HK folds into the snapshot.
+ *
+ * ── Battery: PEAK-HOLD over a ~2 s window, then EMA-smoothed ──
+ * One instantaneous burst every 2 s swung with whatever load was on the rail
+ * that instant (e-ink full-refresh ~every 0.7 s, radio bursts — both pull VSYS
+ * DOWN). Load only ever sags VSYS below the true resting voltage, so the MAX
+ * across a window of lightly-spaced samples ≈ the open-circuit voltage the
+ * discharge curve expects. We sample ~4x/s, keep the window peak, and every ~2 s
+ * fold that peak into an EMA — steady, tracking charge instead of momentary load. */
+void batt_sample(void) {
+    static uint32_t batt_win_start = 0, batt_last_ms = 0;
+    static float    batt_win_peak  = 0.0f;
+    static float    batt_v_ema     = 0.0f;
+    static int      was_usb  = -1;
+    static float    last_bv  = 0.0f;     /* last on-battery reading, retained for diag */
+    static int      last_bp  = -1;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+
+    /* Sample at most ~4x/sec (still ~8 peak samples across the 2 s window), and
+     * not at all during the post-wake radio-settle window. */
+    if (now - batt_last_ms < 250 || (int32_t)(now - g_radio_settle_until) < 0) return;
+    batt_last_ms = now;
+
+    bool usb = is_usb_powered();
+    g_on_usb = usb;
+    /* Charging power-diet: on a USB plug/unplug edge, suspend BLE scanning
+     * while charging (it's the biggest continuous radio load), and restore
+     * the user's setting when unplugged — so the cell can actually fill. */
+    if ((was_usb != 1) && usb) {
+        wetgreg_social_enable(false);
+    } else if ((was_usb != 0) && !usb) {
+        /* ... but never re-arm the scan while Greg is asleep (STATE_SLEEP
+         * powered the whole HCI off; power_sleep_exit restores it). */
+        if (g_saved.social_on && !g_power_sleep) { wetgreg_social_set_self(g_saved.wetgreg_id); wetgreg_social_enable(true); }
+    }
+    if (usb) {
+        /* On USB the rail isn't the battery; show live rail volts, flag -1. */
+        g_batt_pct = -1;
+        g_batt_v   = read_vsys_volts();
+        batt_win_peak = 0.0f; batt_win_start = now; batt_v_ema = 0.0f;
+        (void)was_usb;
+        /* DIAGNOSTIC: serial needs USB, but USB hides the battery. Print the
+         * LAST on-battery reading every ~2 s so it's easy to capture: run on
+         * battery a few seconds, replug USB, read this line. */
+        static uint32_t usb_log_ms = 0;
+        if (now - usb_log_ms >= 2000) {
+            usb_log_ms = now;
+            printf("[BATT] USB rail=%.3f V | last on-battery=%.3f V %d%%\n",
+                   (double)g_batt_v, (double)last_bv, last_bp);
+        }
+    } else {
+        /* Add back the battery-path drop so device-read 3.67 V (full) → 4.20 V. */
+        float v = read_vsys_volts() + VSYS_BATT_OFFSET;
+        if (v > batt_win_peak) batt_win_peak = v;    /* keep the lightest-load sample */
+        if (batt_win_start == 0) batt_win_start = now;
+        if (batt_v_ema <= 0.0f) {                    /* seed immediately on unplug/boot */
+            batt_v_ema = v; g_batt_v = v; g_batt_pct = lipo_percent_hyst(v);
+        }
+        if (now - batt_win_start >= 2000) {
+            float peak = batt_win_peak;
+            batt_v_ema += 0.35f * (peak - batt_v_ema);   /* ~5-window settle */
+            g_batt_v    = batt_v_ema;
+            g_batt_pct  = lipo_percent_hyst(batt_v_ema);
+            batt_win_peak = 0.0f;
+            batt_win_start = now;
+        }
+        last_bv = g_batt_v; last_bp = g_batt_pct;
+    }
+    was_usb = usb ? 1 : 0;
+}
+
 /* ─── Housekeeping sampling (Phase 2) ───────────────────────────────────────
- * Called repeatedly by the Housekeeping task (rtos_tasks.c). This is now the
- * ONLY runtime caller of the I2C accelerometer and the battery ADC, so those
- * blocking reads leave the UI/render path entirely. It samples motion +
- * orientation + steps every pass, the battery every ~2 s, then publishes a
- * snapshot the UI copies. Battery values are cached in g_batt_pct/g_batt_v
- * (declared in the battery section) so the icon / info screen read them with no
- * inline ADC hit. */
+ * Called repeatedly by the Housekeeping task (rtos_tasks.c). This is the ONLY
+ * runtime caller of the I2C accelerometer — a fast, cyw43-lock-FREE read — so it
+ * samples motion + orientation + steps every pass at a steady 20 Hz and publishes
+ * a snapshot the UI copies. Battery/USB values come from batt_task (batt_sample),
+ * cached in g_batt_pct/g_batt_v/g_on_usb so this loop never touches the cyw43
+ * lock and auto-rotate stays instant even under heavy radio traffic. */
 void hk_sample(void) {
     orientation_update();                  /* accel -> g_orientation, steps, input rotation */
     viewing_update();                      /* updates last_motion_ms from real motion       */
     g_screen_idle = !screen_is_viewed();   /* pocket/idle freeze flag — HK owns it now       */
-
-    /* ── Battery: PEAK-HOLD over a ~2 s window, then EMA-smoothed ──
-     * The old code took one instantaneous trimmed-mean burst every 2 s and showed
-     * it raw — so the reading swung with whatever load happened to be on the rail
-     * that instant (the e-ink full-refresh runs ~every 0.7 s and the radio bursts,
-     * both of which pull VSYS DOWN). Load only ever sags VSYS below the true
-     * resting voltage, never above it, so the MAX reading across a window of
-     * lightly-spaced samples ≈ the open-circuit voltage the discharge curve
-     * expects. We sample once per HK tick (~50 ms), keep the window peak, and
-     * every ~2 s fold that peak into an EMA. Result: a steady reading that tracks
-     * real charge instead of momentary load. */
-    static uint32_t batt_win_start = 0, batt_last_ms = 0;
-    static float    batt_win_peak  = 0.0f;
-    static float    batt_v_ema     = 0.0f;
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-
-    /* Sample at most ~4x/sec. read_vsys_volts() grabs the cyw43 lock (GP29 is
-     * shared with the CYW43 SPI), so hammering it at 20 Hz contends with the BLE
-     * radio; 250 ms still gives ~8 peak samples across a 2 s window. */
-    static int   was_usb  = -1;
-    static float last_bv  = 0.0f;     /* last on-battery reading, retained for diag */
-    static int   last_bp  = -1;
-    if (now - batt_last_ms >= 250 && (int32_t)(now - g_radio_settle_until) >= 0) {
-        batt_last_ms = now;
-        bool usb = is_usb_powered();
-        g_on_usb = usb;
-        /* Charging power-diet: on a USB plug/unplug edge, suspend BLE scanning
-         * while charging (it's the biggest continuous radio load), and restore
-         * the user's setting when unplugged — so the cell can actually fill. */
-        if ((was_usb != 1) && usb) {
-            wetgreg_social_enable(false);
-        } else if ((was_usb != 0) && !usb) {
-            /* ... but never re-arm the scan while Greg is asleep (STATE_SLEEP
-             * powered the whole HCI off; power_sleep_exit restores it). */
-            if (g_saved.social_on && !g_power_sleep) { wetgreg_social_set_self(g_saved.wetgreg_id); wetgreg_social_enable(true); }
-        }
-        if (usb) {
-            /* On USB the rail isn't the battery; show live rail volts, flag -1. */
-            g_batt_pct = -1;
-            g_batt_v   = read_vsys_volts();
-            batt_win_peak = 0.0f; batt_win_start = now; batt_v_ema = 0.0f;
-            (void)was_usb;
-            /* DIAGNOSTIC: serial needs USB, but USB hides the battery. Print the
-             * LAST on-battery reading every ~2 s so it's easy to capture: run on
-             * battery a few seconds, replug USB, read this line. */
-            static uint32_t usb_log_ms = 0;
-            if (now - usb_log_ms >= 2000) {
-                usb_log_ms = now;
-                printf("[BATT] USB rail=%.3f V | last on-battery=%.3f V %d%%\n",
-                       (double)g_batt_v, (double)last_bv, last_bp);
-            }
-        } else {
-            /* Add back the battery-path drop so device-read 3.67 V (full) → 4.20 V. */
-            float v = read_vsys_volts() + VSYS_BATT_OFFSET;
-            if (v > batt_win_peak) batt_win_peak = v;    /* keep the lightest-load sample */
-            if (batt_win_start == 0) batt_win_start = now;
-            if (batt_v_ema <= 0.0f) {                    /* seed immediately on unplug/boot */
-                batt_v_ema = v; g_batt_v = v; g_batt_pct = lipo_percent_hyst(v);
-            }
-            if (now - batt_win_start >= 2000) {
-                float peak = batt_win_peak;
-                batt_v_ema += 0.35f * (peak - batt_v_ema);   /* ~5-window settle */
-                g_batt_v    = batt_v_ema;
-                g_batt_pct  = lipo_percent_hyst(batt_v_ema);
-                batt_win_peak = 0.0f;
-                batt_win_start = now;
-            }
-            last_bv = g_batt_v; last_bp = g_batt_pct;
-        }
-        was_usb = usb ? 1 : 0;
-    }
 
     sensor_snapshot_t s;
     s.orientation    = (uint8_t)g_orientation;
@@ -4689,10 +4700,10 @@ void hk_sample(void) {
     s.batt_pct       = g_batt_pct;
     s.vsys           = g_batt_v;
     s.vsys_raw       = 0.0f;   /* the battery-cal screen takes its own fresh RAW read */
-    /* Cached 4 Hz value, NOT a fresh read: is_usb_powered() takes the cyw43
-     * lock, and grabbing it EVERY 50 ms pass parks this task behind radio
-     * traffic — post-wake that starved the accel sampling and froze
-     * auto-rotate for seconds. The battery block above refreshes g_on_usb. */
+    /* Cached value from batt_task, NOT a fresh read: is_usb_powered()/read_vsys
+     * take the cyw43 lock, and doing that in this loop parks the lowest-priority
+     * HK task behind radio traffic — which starved the accel sampling and made
+     * auto-rotate sluggish. batt_sample() refreshes g_on_usb/g_batt_* off-task. */
     s.usb            = g_on_usb;
     rtos_snapshot_publish(&s);
 }
@@ -5002,12 +5013,19 @@ static void app_task(void *param) {
                 }
                 if (got) {
                     wake_screen();                      /* any press = user present */
-                    if (inp == INPUT_DOWN)        { state = STATE_MENU; menu_sel = 0; speaker_tone(800, 50); }
-                    else if (inp == INPUT_CENTER) {
-                        /* 5 quick CENTER presses → pseudo-off. Presses are
-                         * display-paced (~1 per refresh under a mash), so 5
-                         * land in ~2-3 s of determined mashing — inside the
-                         * 5 s window with room to spare. */
+                    if (inp == INPUT_DOWN) {
+                        state = STATE_MENU; menu_sel = 0; speaker_tone(800, 50);
+                        break;                          /* re-render into the menu */
+                    }
+                    if (inp == INPUT_CENTER) {
+                        /* 5 quick CENTER presses → pseudo-off. Do NOT break/re-
+                         * render on a tap: a panel refresh here busies the display,
+                         * and the Input task then COALESCES every following tap into
+                         * one while it waits (fewer than both buffers free). That is
+                         * why it used to take 10+ mashes — only ~1 tap per ~0.5 s
+                         * refresh landed. Staying on the (already-drawn) octopus keeps
+                         * the panel idle, so each human tap emits immediately and a
+                         * normal 5-tap burst engages well inside the 5 s window. */
                         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
                         if (tap_n == 0 || now_ms - tap_t0 > SLEEP_TAP_WINDOW_MS) {
                             tap_t0 = now_ms; tap_n = 1;
@@ -5015,9 +5033,11 @@ static void app_task(void *param) {
                             tap_n = 0;
                             state = STATE_SLEEP;
                         }
-                        speaker_tone(1319, 100);
+                        speaker_tone(1319 + 90 * tap_n, 70);   /* per-tap blip, rising with the count */
+                        if (state == STATE_SLEEP) break;   /* transition → run the SLEEP case */
+                        continue;                          /* panel stays idle for the next tap */
                     }
-                    break;                              /* re-render after a press */
+                    break;                              /* any other press: re-render */
                 }
             }
             break;

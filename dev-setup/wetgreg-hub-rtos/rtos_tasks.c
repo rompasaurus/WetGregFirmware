@@ -62,6 +62,7 @@ static QueueHandle_t g_render_q = NULL;
 static TaskHandle_t g_input_task = NULL;
 static TaskHandle_t g_disp_task  = NULL;
 static TaskHandle_t g_hk_task    = NULL;
+static TaskHandle_t g_batt_task  = NULL;
 
 /* Given by the Display task (core 1) once it has registered with the flash
  * lockout; the UI task waits on it before its first flash write. */
@@ -190,7 +191,7 @@ void rtos_input_isr_notify(void) {
 static void input_task(void *arg) {
     (void)arg;
     /* Seed `prev` with the CURRENT stick state, not INPUT_NONE: a key already
-     * down when this task starts (the CENTER hold that just triggered the 10 s
+     * down when this task starts (the CENTER hold that just triggered the 5 s
      * watchdog reboot, or a finger on the stick at power-on) is stale state,
      * not a press — treating it as an edge injected a phantom event that e.g.
      * skipped the boot splash. It must be released and re-pressed to count. */
@@ -219,14 +220,14 @@ static void input_task(void *arg) {
         uint8_t  j = read_joystick();             /* main.c: rotated current direction */
         uint32_t t = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
-        /* HARD-REBOOT ESCAPE HATCH: hold CENTER for ~10 s and the device reboots,
+        /* HARD-REBOOT ESCAPE HATCH: hold CENTER for ~5 s and the device reboots,
          * no matter what — this task always runs even if the UI is soft-locked,
          * and watchdog_reboot() restarts the firmware unconditionally. */
         static uint32_t center_since = 0;
         if (j == INPUT_CENTER) {
             if (center_since == 0) center_since = t;
-            else if ((uint32_t)(t - center_since) >= 10000) {
-                printf("[INPUT] CENTER held 10s -> reboot\n");
+            else if ((uint32_t)(t - center_since) >= 5000) {
+                printf("[INPUT] CENTER held 5s -> reboot\n");
                 watchdog_reboot(0, 0, 0);          /* immediate, unconditional restart */
             }
         } else {
@@ -276,8 +277,27 @@ static void input_task(void *arg) {
 static void hk_task(void *arg) {
     (void)arg;
     for (;;) {
-        hk_sample();                    /* main.c: read accel/steps/battery, publish snapshot */
-        vTaskDelay(pdMS_TO_TICKS(50));  /* ~20 Hz; battery is sub-sampled inside hk_sample */
+        hk_sample();                    /* main.c: read accel/orientation/steps, publish snapshot */
+        vTaskDelay(pdMS_TO_TICKS(50));  /* ~20 Hz — steady, cyw43-lock-free so auto-rotate stays instant */
+    }
+}
+
+/* ----------------------------------------------------------------------------
+ *  Battery task (core 0, lowest prio) — the cyw43-locked VSYS/USB reads
+ * ------------------------------------------------------------------------- */
+/*  Split OUT of Housekeeping on purpose: read_vsys_volts()/is_usb_powered()
+ *  grab the cyw43 lock (GP29 is the shared CYW43 SPI clock / VBUS sense), so
+ *  under radio traffic a read blocks behind the radio's background task. Left in
+ *  the 20 Hz HK loop that stall dropped the accel sampling rate and made auto-
+ *  rotate sluggish (visible as: snappy for the ~8 s radio-settle window after a
+ *  wake, then slow again once battery reads resumed). Here a stall only delays
+ *  the gauge. batt_sample() self-gates to ~4 Hz internally; a 100 ms tick keeps
+ *  that cadence tight while the task mostly early-returns and yields. */
+static void batt_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        batt_sample();                  /* main.c: VSYS/USB via cyw43-locked ADC -> g_batt_v/pct/on_usb */
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -306,4 +326,7 @@ void rtos_tasks_start(void) {
 
     xTaskCreate(hk_task,      "hk",    HK_TASK_STACK,      NULL, HK_TASK_PRIO,      &g_hk_task);
     vTaskCoreAffinitySet(g_hk_task, CORE0_AFFINITY);
+
+    xTaskCreate(batt_task,    "batt",  BATT_TASK_STACK,    NULL, BATT_TASK_PRIO,    &g_batt_task);
+    vTaskCoreAffinitySet(g_batt_task, CORE0_AFFINITY);
 }
