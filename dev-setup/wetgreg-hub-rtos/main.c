@@ -619,32 +619,38 @@ static void orientation_update(void) {
         g_orient_primed = true;
     }
     if (!mpu_ok) return;
-    static uint32_t last_ms = 0;
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now - last_ms < 250) return;
-    last_ms = now;
 
+    /* Fresh accel EVERY Housekeeping pass (~20 Hz): the read is a 0.2 ms I2C
+     * burst, and this fast cadence is what makes auto-rotate feel instant —
+     * the old shared 250 ms gate made a rotation take ~1-2 s to land before
+     * the panel even started refreshing. The step detector KEEPS the 250 ms
+     * gate below: STEP_CAL_FACTOR was measured against that exact 4 Hz
+     * cadence, so sampling it faster would wreck the calibration. */
     mpu_read_all();
-    pedometer_update();          /* coarse step sampling at this 4 Hz cadence */
-    activity_update(250);        /* daily steps + active-time accrual */
+
+    static uint32_t last_step_ms = 0;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (now - last_step_ms >= 250) {
+        last_step_ms = now;
+        pedometer_update();      /* coarse step sampling at the 4 Hz cadence */
+        activity_update(250);    /* daily steps + active-time accrual */
+#if ORIENT_DEBUG
+        {
+            float dax = accel_g(accel_x), day_ = accel_g(accel_y);
+            float ang = atan2f(day_, dax) * 57.2958f;
+            if (ang < 0) ang += 360.0f;
+            printf("[ORIENT] ax=%.2f ay=%.2f az=%.2f  ang=%.0f  o=%d tall=%d rot=%d\n",
+                   (double)dax, (double)day_, (double)accel_g(accel_z), (double)ang,
+                   g_orientation, orientation_is_tall(), display_rotation);
+        }
+#endif
+    }
     if (!g_auto_rotate) return;   /* manual hold: steps counted, skip auto-rotate */
     /* In-plane gravity angle (degrees, 0..360). Measured anchors:
      *   joystick LEFT  → (X+0.9, Y0.0) → ~0°
      *   joystick RIGHT → (X0.1, Y+0.8) → ~83° (≈90°)
      *   joystick BOTTOM (tall) → TODO: read the HUD in that hold and set below. */
-    float ax = accel_g(accel_x), ay = accel_g(accel_y), az = accel_g(accel_z);
-
-#if ORIENT_DEBUG
-    {
-        float ang = atan2f(ay, ax) * 57.2958f;
-        if (ang < 0) ang += 360.0f;
-        printf("[ORIENT] ax=%.2f ay=%.2f az=%.2f  ang=%.0f  o=%d tall=%d rot=%d\n",
-               (double)ax, (double)ay, (double)az, (double)ang,
-               g_orientation, orientation_is_tall(), display_rotation);
-    }
-#else
-    (void)az;
-#endif
+    float ax = accel_g(accel_x), ay = accel_g(accel_y);
 
     int o = orientation_classify(ax, ay);
     if (o < 0) return;                       /* flat / ignore zone: keep current */
@@ -662,12 +668,14 @@ static void orientation_update(void) {
         return;
     }
 
-    /* Hysteresis: require a few stable reads before switching. */
+    /* Hysteresis: ~300 ms of consistent reads at the ~20 Hz cadence before
+     * switching — the same flap protection the old 3-of-4Hz filter gave
+     * (~750-1000 ms), at a quarter of the latency. */
     static int cand = 0, stable = 0;
-    if (o == cand) { if (stable < 3) stable++; }
+    if (o == cand) { if (stable < 6) stable++; }
     else { cand = o; stable = 0; }
 
-    if (stable >= 3 && g_orientation != cand) {
+    if (stable >= 6 && g_orientation != cand) {
         g_orientation = cand;
         input_set_rotation(ORIENT_CFG[g_orientation].in_rot);  /* joystick follows */
     }
