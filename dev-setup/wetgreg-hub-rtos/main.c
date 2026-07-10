@@ -4418,6 +4418,7 @@ static void wifi_disconnect(void) {
 static bool     g_slept_bt   = false;         /* HCI was on at sleep entry */
 static bool     g_slept_wifi = false;         /* WiFi was connected at sleep entry */
 static char     g_slept_ssid[33] = "";
+static const char *g_rejoin_pass = NULL;      /* saved-store key the rejoin is using */
 static uint32_t g_wifi_rejoin_deadline = 0;   /* 0 = no background rejoin in flight */
 
 /* Background WiFi rejoin after wake: async join + cheap polling from the
@@ -4433,6 +4434,7 @@ static void wifi_rejoin_start(const char *ssid) {
     wifi_enabled = true;
     cyw43_arch_enable_sta_mode();
     if (cyw43_arch_wifi_connect_async(ssid, pass, pass[0] ? CYW43_AUTH_WPA2_AES_PSK : 0) == 0) {
+        g_rejoin_pass = pass;                 /* points into g_saved — stable storage */
         g_wifi_rejoin_deadline = to_ms_since_boot(get_absolute_time()) + 30000;
     } else {
         wifi_enabled = false;
@@ -4445,6 +4447,7 @@ static void wifi_rejoin_poll(void) {
     if (now - last_check < 2000) return;      /* ~0.5 Hz is plenty */
     last_check = now;
     int ts = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    bool expired = (int32_t)(now - g_wifi_rejoin_deadline) > 0;
     if (ts == CYW43_LINK_UP) {
         g_wifi_rejoin_deadline = 0;
         wifi_connected = true;
@@ -4453,7 +4456,13 @@ static void wifi_rejoin_poll(void) {
         cyw43_wifi_get_rssi(&cyw43_state, &wifi_rssi);
         printf("[SLEEP] wifi back: %s\n", wifi_ip_str);
         ntp_request();
-    } else if (ts < 0 || (int32_t)(now - g_wifi_rejoin_deadline) > 0) {
+    } else if (ts == CYW43_LINK_NONET && !expired && g_rejoin_pass) {
+        /* AP not seen this scan round — re-issue the join and keep polling
+         * until the deadline (mirrors wifi_connect_to's NONET handling; the
+         * old code treated this transient as fatal and dropped the rejoin). */
+        cyw43_arch_wifi_connect_async(g_slept_ssid, g_rejoin_pass,
+                                      g_rejoin_pass[0] ? CYW43_AUTH_WPA2_AES_PSK : 0);
+    } else if (ts == CYW43_LINK_BADAUTH || ts == CYW43_LINK_FAIL || expired) {
         g_wifi_rejoin_deadline = 0;           /* give up quietly; the menu can reconnect */
         wifi_enabled = false;
         strncpy(wifi_ssid_display, "---", sizeof(wifi_ssid_display));
@@ -4467,8 +4476,11 @@ static void power_sleep_enter(void) {
     g_slept_bt = wetgreg_bt_active();
     wetgreg_social_enable(false);
     if (g_slept_bt) wetgreg_bt_stop();        /* advertising off + HCI power off */
-    g_slept_wifi = wifi_connected;
-    if (g_slept_wifi)
+    /* An in-flight background rejoin counts as "wifi was on" — otherwise a
+     * nap taken during the ~30 s rejoin window would silently forget the
+     * network (g_slept_ssid already holds the right name in that case). */
+    g_slept_wifi = wifi_connected || g_wifi_rejoin_deadline != 0;
+    if (wifi_connected)
         snprintf(g_slept_ssid, sizeof(g_slept_ssid), "%s", wifi_ssid_display);
     if (wifi_enabled || wifi_connected) wifi_disconnect();
     g_wifi_rejoin_deadline = 0;               /* cancel any rejoin still in flight */
@@ -4905,9 +4917,17 @@ static void app_task(void *param) {
                 /* Pseudo-off: no significant motion (and no presses — those
                  * reset last_motion_ms via wake_screen) for 5 min → Greg dozes
                  * off. Guarded on mpu_ok twice over: without an accel,
-                 * viewing_update pins last_motion_ms to now anyway. */
+                 * viewing_update pins last_motion_ms to now anyway.
+                 *
+                 * Read the last_motion_ms GLOBAL here, NOT the snapshot copy:
+                 * wake_screen() (this task) refreshes the global the moment
+                 * Greg wakes, but Housekeeping republishes the snapshot only
+                 * every ~50 ms — after waking from an INACTIVITY nap the stale
+                 * copy is still ≥5 min old, and the first tick would put Greg
+                 * straight back to sleep (field bug: wake needed two presses).
+                 * Aligned 32-bit read — atomic on the M33, benign race. */
                 if (s.mpu_ok &&
-                    to_ms_since_boot(get_absolute_time()) - s.last_motion_ms >= SLEEP_IDLE_MS) {
+                    to_ms_since_boot(get_absolute_time()) - last_motion_ms >= SLEEP_IDLE_MS) {
                     state = STATE_SLEEP;
                     break;
                 }

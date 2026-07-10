@@ -85,6 +85,15 @@ re-joins the previous WiFi network **asynchronously in the background** (no
 ---
 
 ## Notes / References
+- **Field fix (2026-07-10):** waking from an *inactivity* nap needed two CENTER
+  presses — the auto-sleep check read `last_motion_ms` from the Housekeeping
+  snapshot, which is republished only every ~50 ms; right after wake the stale
+  copy was still ≥5 min old and put Greg straight back to sleep on the first
+  tick. The check now reads the global that `wake_screen()` just refreshed.
+  The instant re-sleep also ripped the radios down mid-restart (suspected cause
+  of the post-wake orientation sluggishness) and dropped the WiFi rejoin; the
+  rejoin now also survives transient NONET scan rounds and naps taken during
+  the rejoin window.
 - Implementation: `dev-setup/wetgreg-hub-rtos/main.c` — `STATE_SLEEP`,
   `render_sleep_screen()`, `power_sleep_enter()/power_sleep_exit()`,
   `wifi_rejoin_start()/wifi_rejoin_poll()`; panel deep-sleep plumbing in
