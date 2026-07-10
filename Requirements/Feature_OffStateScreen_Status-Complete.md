@@ -94,6 +94,14 @@ re-joins the previous WiFi network **asynchronously in the background** (no
   of the post-wake orientation sluggishness) and dropped the WiFi rejoin; the
   rejoin now also survives transient NONET scan rounds and naps taken during
   the rejoin window.
+- **Field fix (2026-07-10, #2):** auto-rotate was frozen for ~4-5 s after every
+  wake. Root cause: Housekeeping's snapshot fill called `is_usb_powered()`
+  (cyw43-locked) on EVERY 50 ms pass, and the post-wake radio restart holds
+  that lock for long stretches — the sensor task queued behind the radio and
+  accel sampling collapsed. Fixes: snapshot serves the cached 4 Hz `g_on_usb`;
+  battery reads pause 8 s post-wake (`g_radio_settle_until`); the WiFi rejoin
+  fires 4 s AFTER the BLE restart instead of simultaneously. Wake now logs
+  clk_sys/clk_peri over serial to confirm the clock restore on hardware.
 - Implementation: `dev-setup/wetgreg-hub-rtos/main.c` — `STATE_SLEEP`,
   `render_sleep_screen()`, `power_sleep_enter()/power_sleep_exit()`,
   `wifi_rejoin_start()/wifi_rejoin_poll()`; panel deep-sleep plumbing in

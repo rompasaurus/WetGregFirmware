@@ -568,6 +568,12 @@ static void wake_screen(void) {        /* user is present → unfreeze + redraw 
 #define SLEEP_TAP_WINDOW_MS  5000u               /* ... within 5 s */
 static bool g_power_sleep = false;
 
+/* While the radios restart after a wake they hold the cyw43 lock for long
+ * stretches; Housekeeping must NOT queue behind it (its lock-taking battery
+ * reads would stall the accel sampling and freeze auto-rotate for seconds —
+ * field bug). Battery reads pause until this deadline; cached values serve. */
+static volatile uint32_t g_radio_settle_until = 0;
+
 /* ─── Orientation → display + input rotation (accelerometer auto-rotate) ───
  * Classifies the in-plane gravity vector into one of 4 holds and, with
  * hysteresis, sets g_orientation. The canvas setters then pick a compatible
@@ -4428,6 +4434,8 @@ static bool     g_slept_wifi = false;         /* WiFi was connected at sleep ent
 static char     g_slept_ssid[33] = "";
 static const char *g_rejoin_pass = NULL;      /* saved-store key the rejoin is using */
 static uint32_t g_wifi_rejoin_deadline = 0;   /* 0 = no background rejoin in flight */
+static uint32_t g_rejoin_start_ms = 0;        /* deferred-join fire time; 0 = none */
+static char     g_rejoin_pending[33] = "";    /* ssid waiting for the deferred join */
 
 /* Background WiFi rejoin after wake: async join + cheap polling from the
  * octopus loop, so waking never blocks ~20 s on DHCP like wifi_connect_to. */
@@ -4477,6 +4485,20 @@ static void wifi_rejoin_poll(void) {
     }
 }
 
+/* Octopus-loop hook: fire the DEFERRED post-wake join once its delay elapses,
+ * then poll the join to completion. The join is deferred a few seconds so the
+ * WiFi scan/join doesn't pile onto the BLE restart the moment the user wakes
+ * the device — that combined radio burst held the cyw43 lock long enough to
+ * starve Housekeeping's sensor sampling (frozen auto-rotate, field bug). */
+static void wifi_rejoin_tick(void) {
+    if (g_rejoin_start_ms) {
+        if ((int32_t)(to_ms_since_boot(get_absolute_time()) - g_rejoin_start_ms) < 0) return;
+        g_rejoin_start_ms = 0;
+        wifi_rejoin_start(g_rejoin_pending);
+    }
+    if (g_wifi_rejoin_deadline) wifi_rejoin_poll();
+}
+
 static void power_sleep_enter(void) {
     printf("[SLEEP] pseudo-off: radios down, panel asleep, 48 MHz\n");
 
@@ -4484,14 +4506,15 @@ static void power_sleep_enter(void) {
     g_slept_bt = wetgreg_bt_active();
     wetgreg_social_enable(false);
     if (g_slept_bt) wetgreg_bt_stop();        /* advertising off + HCI power off */
-    /* An in-flight background rejoin counts as "wifi was on" — otherwise a
-     * nap taken during the ~30 s rejoin window would silently forget the
-     * network (g_slept_ssid already holds the right name in that case). */
-    g_slept_wifi = wifi_connected || g_wifi_rejoin_deadline != 0;
+    /* An in-flight (or still-deferred) background rejoin counts as "wifi was
+     * on" — otherwise a nap taken during the rejoin window would silently
+     * forget the network (g_slept_ssid already holds the right name then). */
+    g_slept_wifi = wifi_connected || g_wifi_rejoin_deadline != 0 || g_rejoin_start_ms != 0;
     if (wifi_connected)
         snprintf(g_slept_ssid, sizeof(g_slept_ssid), "%s", wifi_ssid_display);
     if (wifi_enabled || wifi_connected) wifi_disconnect();
     g_wifi_rejoin_deadline = 0;               /* cancel any rejoin still in flight */
+    g_rejoin_start_ms = 0;                    /* ... and any join still deferred */
 
     /* Let the sleep still reach the glass, then deep-sleep the panel. The
      * render queue is FIFO, so the command lands strictly after the blit. */
@@ -4522,14 +4545,24 @@ static void power_sleep_exit(void) {
      * the sleep still). Queued now, executes before the next rendered frame. */
     rtos_display_cmd(DISP_CMD_WAKE);
 
-    /* Radios back the way they were. */
+    /* Radios back the way they were — but STAGGERED: BT/social power on now,
+     * the WiFi join fires ~4 s later from the octopus loop (wifi_rejoin_tick)
+     * so the combined radio burst can't hog the cyw43 lock while the user is
+     * interacting. Housekeeping's lock-taking battery reads also pause until
+     * the settle deadline so accel sampling (auto-rotate) never stalls. */
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    g_radio_settle_until = now + 8000;
     if (g_slept_bt) wetgreg_bt_init();
     if (g_saved.social_on) {
         wetgreg_social_set_self(g_saved.wetgreg_id);
         wetgreg_social_enable(true);
     }
-    if (g_slept_wifi) wifi_rejoin_start(g_slept_ssid);
-    printf("[SLEEP] awake: full clock, radios restored\n");
+    if (g_slept_wifi) {
+        snprintf(g_rejoin_pending, sizeof(g_rejoin_pending), "%s", g_slept_ssid);
+        g_rejoin_start_ms = now + 4000;
+    }
+    printf("[SLEEP] awake: clk_sys=%lu Hz clk_peri=%lu Hz, radios restoring\n",
+           (unsigned long)clock_get_hz(clk_sys), (unsigned long)clock_get_hz(clk_peri));
 }
 
 /* ─── Pick a quote matching current_mood, or random if -1 ─── */
@@ -4594,7 +4627,7 @@ void hk_sample(void) {
     static int   was_usb  = -1;
     static float last_bv  = 0.0f;     /* last on-battery reading, retained for diag */
     static int   last_bp  = -1;
-    if (now - batt_last_ms >= 250) {
+    if (now - batt_last_ms >= 250 && (int32_t)(now - g_radio_settle_until) >= 0) {
         batt_last_ms = now;
         bool usb = is_usb_powered();
         g_on_usb = usb;
@@ -4656,7 +4689,11 @@ void hk_sample(void) {
     s.batt_pct       = g_batt_pct;
     s.vsys           = g_batt_v;
     s.vsys_raw       = 0.0f;   /* the battery-cal screen takes its own fresh RAW read */
-    s.usb            = is_usb_powered();
+    /* Cached 4 Hz value, NOT a fresh read: is_usb_powered() takes the cyw43
+     * lock, and grabbing it EVERY 50 ms pass parks this task behind radio
+     * traffic — post-wake that starved the accel sampling and froze
+     * auto-rotate for seconds. The battery block above refreshes g_on_usb. */
+    s.usb            = g_on_usb;
     rtos_snapshot_publish(&s);
 }
 
@@ -4939,7 +4976,7 @@ static void app_task(void *param) {
                     state = STATE_SLEEP;
                     break;
                 }
-                if (g_wifi_rejoin_deadline) wifi_rejoin_poll();   /* post-wake async rejoin */
+                wifi_rejoin_tick();                    /* deferred post-wake wifi rejoin */
                 if (wetgreg_bt_active() && wetgreg_bt_take_command() >= 0) {
                     qi = pick_quote();   /* phone poked us → fresh quote */
                     speaker_tone(1600, 60);
