@@ -67,15 +67,40 @@ endif()
 message(STATUS "Display variant: ${DISPLAY_VARIANT}")
 
 # --- The firmware executable -------------------------------------------------
-# NOTE: through Phase 0/1 the logic still lives in the single main.c (carried
-# over from wetgreg-hub). Phase 2 splits it into src/rtos, src/drivers, etc., at
-# which point more .c files get added here.
+# The application is split into modules by concern (see docs + the src/ tree):
+#   src/app      — main() + the UI state machine (the app shell)
+#   src/drivers  — one .c/.h pair per hardware entity (joystick, speaker, ...)
+#   src/sys      — system services (motion, power, storage, rng, rtc seed)
+#   src/net      — WiFi + NTP
+#   src/ui       — canvas, font, icons, octopus art, one module per screen family
 add_executable(wetgreg_hub_rtos
-    main.c
-    rtos_tasks.c          # Phase 2: the Input/Display/Housekeeping task orchestration
+    src/app/app_main.c
+    src/drivers/accel.c
+    src/drivers/battery.c
+    src/drivers/display.c
+    src/drivers/joystick.c
+    src/drivers/speaker.c
+    src/net/ntp.c
+    src/net/wifi.c
+    src/sys/motion.c
+    src/sys/power.c
+    src/sys/rng.c
+    src/sys/rtc_clock.c
+    src/sys/storage.c
+    src/ui/canvas.c
+    src/ui/icons.c
+    src/ui/octopus.c
+    src/ui/screens_anim.c
+    src/ui/screens_home.c
+    src/ui/screens_menu.c
+    src/ui/screens_network.c
+    src/ui/screens_social.c
+    src/ui/text.c
+    rtos_tasks.c          # the Input/Display/Housekeeping task orchestration
     freertos_hooks.c      # kernel-required callbacks (idle/timer memory, error hooks)
     bt.c
     lib/Config/DEV_Config.c
+    lib/Config/rtc_compat.c   # shared software-RTC state (one clock for all modules)
     ${EPD_SOURCE}
 )
 
@@ -85,6 +110,10 @@ endif()
 
 target_include_directories(wetgreg_hub_rtos PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}            # so #include "FreeRTOSConfig.h" is found
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sys
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/Config
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/e-Paper

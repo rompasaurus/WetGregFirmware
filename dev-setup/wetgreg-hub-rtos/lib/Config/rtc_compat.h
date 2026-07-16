@@ -40,8 +40,13 @@ typedef struct {
     int8_t  sec;
 } datetime_t;
 
-static datetime_t _sw_rtc_base;
-static uint64_t   _sw_rtc_base_us;
+/* Shared software-RTC state — defined ONCE in rtc_compat.c. These were
+ * `static` (per translation unit) when the whole firmware lived in main.c;
+ * with the code split into modules, every .c file would otherwise get its
+ * OWN private clock and rtc_set_datetime() in one module would be invisible
+ * to rtc_get_datetime() in another. */
+extern datetime_t _sw_rtc_base;
+extern uint64_t   _sw_rtc_base_us;
 
 static inline void rtc_init(void) {
     /* nothing to do — timer is always running */
