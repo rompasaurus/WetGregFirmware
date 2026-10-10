@@ -48,7 +48,7 @@ under a second of settling the device.
 - [x] **AC1:** Orientation classification runs at the full HK cadence (~20 Hz), decoupled from the pedometer gate.
 - [x] **AC2:** Step counting cadence (and its ×2 calibration) unchanged.
 - [x] **AC3:** Flap protection retained (~300 ms consistent-hold before switching; ignore-zone and boot-prime behavior untouched).
-- [ ] **AC4:** Verified on hardware — rotation feels sub-second; no layout flapping while walking/handling.
+- [x] **AC4:** Verified on hardware — rotation feels sub-second; no layout flapping while walking/handling.
 
 ---
 

@@ -599,11 +599,22 @@ static void app_task(void *param) {
                 transpose_to_display();
                 display_render();
                 frame_idx++;
-                /* Sleep one frame on the input queue — any press exits, and the
-                 * wait keeps the submit cadence above the panel drain so the
-                 * Input task is never starved (same pattern as the splash). */
+                /* Any press exits. The Input task only emits once BOTH display
+                 * buffers are free, and a fixed 450 ms wait resubmitted frames
+                 * faster than the panel drained (~0.7 s+) — so the press stayed
+                 * pending forever and the intro could not be exited. Wait for
+                 * the panel to go idle (still listening), then give the Input
+                 * task an idle window; INTRO_FRAME_MS stays the minimum cadence. */
                 uint8_t inp;
-                leave = ui_get_input(&inp, INTRO_FRAME_MS);
+                uint32_t f0 = to_ms_since_boot(get_absolute_time());
+                while (!leave && ui_display_busy()
+                       && to_ms_since_boot(get_absolute_time()) - f0 < 3000)
+                    leave = ui_get_input(&inp, 20);
+                if (!leave) {
+                    uint32_t spent = to_ms_since_boot(get_absolute_time()) - f0;
+                    uint32_t idle  = spent + 100 < INTRO_FRAME_MS ? INTRO_FRAME_MS - spent : 100;
+                    leave = ui_get_input(&inp, idle);
+                }
             }
             if (leave || elapsed >= INTRO_TOTAL_MS) {
                 if (leave) speaker_tone(1319, 80);
