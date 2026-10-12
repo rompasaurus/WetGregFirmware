@@ -28,6 +28,7 @@ definition-of-done section, and a suggested git branch name.
 | [WISE Mood + Quote Pack](complete/Feature_WiseMood_Status-Complete.md) | Content (2026-07-09) | ✅ Complete | `feature/wise-mood` |
 | [Pedometer Calibration](complete/Feature_PedometerCalibration_Status-Complete.md) | On-body measurement (2026-07-09) | ✅ Complete | `fix/pedometer-calibration` |
 | [Fast Auto-Rotate](complete/Feature_FastAutoRotate_Status-Complete.md) | Field report (2026-07-10) | ✅ Complete | `fix/auto-rotate-latency` |
+| [Battery Gauge + Power Budget](incomplete/Feature_BatteryGaugeAndPowerBudget_Status-Incomplete.md) | Field report (2026-10-10) | ❌ Incomplete | `feature/battery-gauge-power-budget` |
 
 Sources: handwritten notes summarized in [`../Notes/notes-summary.md`](../Notes/notes-summary.md)
 and open GitHub issues at https://github.com/rompasaurus/WetGregFirmware/issues.

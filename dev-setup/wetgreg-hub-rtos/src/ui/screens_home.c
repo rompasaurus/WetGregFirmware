@@ -122,6 +122,9 @@ void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
         char line[40];
         snprintf(line, sizeof(line), "%s %d  %d:%02d%s",
                  month_names[t.month - 1], t.day, hr12, t.min, ampm);
+        if ((int)strlen(line) * 6 > 122)   /* long month overflows 122 px — abbreviate */
+            snprintf(line, sizeof(line), "%.3s %d  %d:%02d%s",
+                     month_names[t.month - 1], t.day, hr12, t.min, ampm);
         int x = (122 - (int)strlen(line) * 6) / 2; if (x < 0) x = 0;
         draw_text(x, 14, line, 122);
     }

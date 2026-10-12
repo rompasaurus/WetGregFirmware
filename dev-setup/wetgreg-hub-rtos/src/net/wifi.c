@@ -13,8 +13,41 @@
 #include "pico/cyw43_arch.h"
 
 #include "ntp.h"
+#include "power.h"         /* g_batt_low / g_power_sleep — no background joins then */
 #include "storage.h"       /* saved-network password lookup for the rejoin */
 #include "wifi_config.h"   /* compile-time WIFI_SSID / WIFI_PASS */
+
+/* ─── Policy state ─── */
+#define WIFI_SYNC_LINGER_AUTO_MS    (20u * 1000u)          /* background join: drop 20 s after NTP */
+#define WIFI_SYNC_LINGER_MANUAL_MS  (90u * 1000u)          /* menu join: give the status screen a look */
+#define WIFI_SYNC_GIVEUP_MS         (120u * 1000u)         /* no NTP reply in 2 min → drop, retry later */
+#define WIFI_SYNC_PERIOD_MS         (24u * 3600u * 1000u)  /* daily */
+#define WIFI_SYNC_RETRY_MS          (2u * 3600u * 1000u)   /* after a failed attempt */
+#define WIFI_SYNC_BOOT_DELAY_MS     (20u * 1000u)          /* let the splash finish first */
+
+static uint32_t g_last_sync_ms      = 0;   /* 0 = never (ms since boot, forced non-zero) */
+static uint32_t g_connected_since   = 0;   /* 0 = not connected */
+static uint32_t g_linger_ms         = WIFI_SYNC_LINGER_AUTO_MS;
+static uint32_t g_next_autosync_ms  = 0;   /* 0 = none scheduled */
+static uint32_t g_ntp_retry_ms      = 0;
+static bool     g_pm_applied        = false;
+
+static uint32_t now_ms(void) { return to_ms_since_boot(get_absolute_time()); }
+
+/* Both join paths land here once DHCP is up: remember the network for the
+ * daily sync, stamp the session, and ask for the time. */
+static void wifi_on_link_up(const char *ssid, bool manual) {
+    wifi_connected = true;
+    struct netif *netif = &cyw43_state.netif[CYW43_ITF_STA];
+    snprintf(wifi_ip_str, sizeof(wifi_ip_str), "%s", ipaddr_ntoa(&netif->ip_addr));
+    cyw43_wifi_get_rssi(&cyw43_state, &wifi_rssi);
+    g_connected_since = now_ms() ? now_ms() : 1;
+    g_linger_ms       = manual ? WIFI_SYNC_LINGER_MANUAL_MS : WIFI_SYNC_LINGER_AUTO_MS;
+    g_ntp_retry_ms    = g_connected_since;
+    g_pm_applied      = false;
+    wifi_last_ssid_store(ssid);           /* no flash wear when unchanged */
+    ntp_request();
+}
 
 /* ─── WiFi state ─── */
 bool    wifi_enabled   = false;
@@ -163,13 +196,8 @@ void wifi_connect_to(const char *ssid, const char *password) {
         cyw43_arch_wait_for_work_until(make_timeout_time_ms(250));
     }
 
-    wifi_connected = true;
-    struct netif *netif = &cyw43_state.netif[CYW43_ITF_STA];
-    snprintf(wifi_ip_str, sizeof(wifi_ip_str), "%s", ipaddr_ntoa(&netif->ip_addr));
-    cyw43_wifi_get_rssi(&cyw43_state, &wifi_rssi);
+    wifi_on_link_up(ssid, true);
     printf("[WiFi] Connected: %s  RSSI: %d\n", wifi_ip_str, (int)wifi_rssi);
-
-    ntp_request();
 }
 
 void wifi_connect(void) {
@@ -179,9 +207,12 @@ void wifi_connect(void) {
 void wifi_disconnect(void) {
     printf("[WiFi] Disconnecting...\n");
     cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-    /* Keep CYW43 initialised — battery VSYS sense needs it on GPIO 29 */
+    /* The CYW43 stays initialised here (GPIO 25 gates the VSYS divider and
+     * VBUS sense lives on the chip); only the STATE_SLEEP path powers it down. */
     wifi_connected = false;
     wifi_enabled = false;
+    g_connected_since = 0;
+    g_pm_applied = false;
     ntp_synced = false;
     strncpy(wifi_ssid_display, "---", sizeof(wifi_ssid_display));
     strncpy(wifi_ip_str, "---", sizeof(wifi_ip_str));
@@ -216,12 +247,8 @@ static void wifi_rejoin_poll(void) {
     bool expired = (int32_t)(now - g_wifi_rejoin_deadline) > 0;
     if (ts == CYW43_LINK_UP) {
         g_wifi_rejoin_deadline = 0;
-        wifi_connected = true;
-        struct netif *netif = &cyw43_state.netif[CYW43_ITF_STA];
-        snprintf(wifi_ip_str, sizeof(wifi_ip_str), "%s", ipaddr_ntoa(&netif->ip_addr));
-        cyw43_wifi_get_rssi(&cyw43_state, &wifi_rssi);
-        printf("[SLEEP] wifi back: %s\n", wifi_ip_str);
-        ntp_request();
+        wifi_on_link_up(g_rejoin_ssid, false);
+        printf("[WiFi] background join up: %s\n", wifi_ip_str);
     } else if (ts == CYW43_LINK_NONET && !expired && g_rejoin_pass) {
         /* AP not seen this scan round — re-issue the join and keep polling
          * until the deadline (mirrors wifi_connect_to's NONET handling; the
@@ -258,4 +285,76 @@ void wifi_rejoin_tick(void) {
         wifi_rejoin_start(g_rejoin_pending);
     }
     if (g_wifi_rejoin_deadline) wifi_rejoin_poll();
+}
+
+/* ─── WiFi power policy ─── */
+
+void wifi_policy_boot(void) {
+    if (!g_saved.last_ssid[0]) return;           /* never joined anything — nothing to sync against */
+    uint32_t now = now_ms();
+    if (g_saved.wifi_mode == WIFI_MODE_ALWAYS) {
+        /* The user asked for the link to stay up: bring it up in the
+         * background once the splash is done (never blocks boot). */
+        wifi_schedule_rejoin(g_saved.last_ssid, WIFI_SYNC_BOOT_DELAY_MS);
+    } else {
+        g_next_autosync_ms = (now + WIFI_SYNC_BOOT_DELAY_MS) ? (now + WIFI_SYNC_BOOT_DELAY_MS) : 1;
+    }
+}
+
+uint32_t wifi_last_sync_age_s(void) {
+    if (!g_last_sync_ms) return UINT32_MAX;
+    return (now_ms() - g_last_sync_ms) / 1000u;
+}
+
+void wifi_policy_tick(void) {
+    static uint32_t last_tick = 0;
+    static bool     prev_synced = false;
+    uint32_t now = now_ms();
+    if (now - last_tick < 1000) return;          /* 1 Hz is plenty */
+    last_tick = now;
+
+    if (ntp_synced && !prev_synced) {            /* NTP reply just landed */
+        g_last_sync_ms = now ? now : 1;
+        g_next_autosync_ms = now + WIFI_SYNC_PERIOD_MS;
+        if (!g_next_autosync_ms) g_next_autosync_ms = 1;
+        printf("[WiFi] clock synced; next background sync in 24 h\n");
+    }
+    prev_synced = ntp_synced;
+
+    if (wifi_connected) {
+        if (g_saved.wifi_mode == WIFI_MODE_SYNC_ONLY) {
+            if (ntp_synced) {
+                if (now - g_last_sync_ms >= g_linger_ms) {
+                    printf("[WiFi] sync done — dropping the link to save power\n");
+                    wifi_disconnect();
+                }
+            } else if (g_connected_since && now - g_connected_since >= WIFI_SYNC_GIVEUP_MS) {
+                printf("[WiFi] no NTP reply in 2 min — dropping the link, retry in 2 h\n");
+                wifi_disconnect();
+                g_next_autosync_ms = now + WIFI_SYNC_RETRY_MS;
+            } else if (now - g_ntp_retry_ms >= 20000) {
+                g_ntp_retry_ms = now;
+                ntp_request();                   /* UDP is lossy; ask again */
+            }
+        } else if (!g_pm_applied && ntp_synced) {
+            /* ALWAYS: once the time is in, sit in the deepest WiFi power-save.
+             * PM1 trades throughput we never use for the lowest idle draw. */
+            cyw43_wifi_pm(&cyw43_state, CYW43_AGGRESSIVE_PM);
+            g_pm_applied = true;
+            printf("[WiFi] link kept up in PM1 power-save\n");
+        } else if (g_pm_applied && g_last_sync_ms && now - g_last_sync_ms >= WIFI_SYNC_PERIOD_MS
+                   && now - g_ntp_retry_ms >= 60000) {
+            g_ntp_retry_ms = now;             /* ALWAYS: trim the software clock's drift daily */
+            ntp_synced = false;               /* so the reply registers as a fresh sync */
+            ntp_request();
+        }
+    } else if (g_saved.wifi_mode == WIFI_MODE_SYNC_ONLY && g_next_autosync_ms
+               && (int32_t)(now - g_next_autosync_ms) >= 0
+               && !wifi_enabled && !wifi_rejoin_pending()
+               && g_saved.last_ssid[0] && !g_batt_low && !g_power_sleep) {
+        printf("[WiFi] background time sync: joining \"%s\"\n", g_saved.last_ssid);
+        wifi_schedule_rejoin(g_saved.last_ssid, 0);
+        g_next_autosync_ms = now + WIFI_SYNC_RETRY_MS;   /* success re-arms the daily period */
+        if (!g_next_autosync_ms) g_next_autosync_ms = 1;
+    }
 }

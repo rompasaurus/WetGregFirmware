@@ -62,10 +62,12 @@
  * Without it, the scheduler would move tasks between cores freely. */
 #define configUSE_CORE_AFFINITY                 1
 
-/* In SMP there is one idle task PER core. The "passive" idle hook is an optional
- * callback that runs on the idle task(s). We don't use it; it MUST be defined
- * (to 0) for SMP builds or the kernel header errors out. */
-#define configUSE_PASSIVE_IDLE_HOOK             0
+/* In SMP there is one idle task PER core. The "passive" idle hook is a callback
+ * that runs on EVERY idle task (the active one on core 0 calls it too). We use
+ * it to put the idle core into WFI (freertos_hooks.c): without it the kernel's
+ * idle loop simply spins, and a spinning Cortex-M33 at 150 MHz is the single
+ * biggest item in the battery budget. */
+#define configUSE_PASSIVE_IDLE_HOOK             1
 
 /* ----------------------------------------------------------------------------
  *  ARMv8-M (Cortex-M33) port options  —  required by the RP2350_ARM_NTZ port
@@ -214,9 +216,10 @@
  *  Safety hooks  —  callbacks the kernel invokes when something goes wrong
  * ------------------------------------------------------------------------- */
 
-/* Per-tick / per-idle user callbacks: off (we don't need periodic side-effects
- * from the kernel itself). */
-#define configUSE_IDLE_HOOK                     0
+/* Idle hook ON: vApplicationIdleHook() (freertos_hooks.c) executes WFI so an
+ * idle core halts until the next interrupt (the 1 kHz tick, a GPIO/radio IRQ,
+ * a cross-core yield) instead of burning ~10 mA busy-looping. Tick hook off. */
+#define configUSE_IDLE_HOOK                     1
 #define configUSE_TICK_HOOK                     0
 
 /* 2 = the heaviest stack-overflow check: on every context switch the kernel

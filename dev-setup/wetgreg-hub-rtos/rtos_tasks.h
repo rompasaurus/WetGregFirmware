@@ -163,6 +163,10 @@ void rtos_display_cmd(int cmd);
  * replaces the old busy-poll: the UI sleeps efficiently instead of spinning. */
 bool ui_get_input(uint8_t *code, uint32_t timeout_ms);
 
+/* True when no press has been consumed for `ms` — sub-screens use it to fall
+ * back to the octopus screen instead of re-rendering a menu forever. */
+bool ui_idle_for(uint32_t ms);
+
 /* True while a frame is in flight to the panel (fewer than both back-buffers
  * free). The Input task paces presses with this; the STATE_SLEEP power path
  * uses it to wait for the final still before deep-sleeping the panel. */
@@ -183,5 +187,7 @@ void    display_init_panel(void);        /* EPD_Init + EPD_Clear (Display task p
 void    display_blit(int buf_idx);       /* EPD_Partial(display_buf[idx]) (Display task) */
 void    display_panel_cmd(int cmd);      /* EPD deep-sleep / re-init (Display task; DISP_CMD_*) */
 void    display_grab_into(int buf_idx);  /* copy ui_buf -> display_buf[idx] (UI side) */
+bool    display_frame_unchanged(void);   /* ui_buf == last frame handed to the panel? (UI side) */
+void    display_invalidate_last(void);   /* forget the last frame (panel re-init/clear) */
 
 #endif /* RTOS_TASKS_H */

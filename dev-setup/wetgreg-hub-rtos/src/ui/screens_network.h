@@ -19,11 +19,12 @@ void render_network_screen(void);
 
 /* ─── Network submenu ─── */
 #define NET_ITEM_ONOFF      0
-#define NET_ITEM_SCAN       1
-#define NET_ITEM_SAVED      2
-#define NET_ITEM_STATUS     3
-#define NET_ITEM_BACK       4
-#define NET_MENU_COUNT      5
+#define NET_ITEM_MODE       1   /* SYNC ONLY (default) / ALWAYS ON — see wifi.h */
+#define NET_ITEM_SCAN       2
+#define NET_ITEM_SAVED      3
+#define NET_ITEM_STATUS     4
+#define NET_ITEM_BACK       5
+#define NET_MENU_COUNT      6
 void render_net_menu(int sel);
 
 /* ─── Scan results ─── */

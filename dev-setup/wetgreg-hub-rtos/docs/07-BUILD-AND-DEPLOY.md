@@ -31,6 +31,15 @@ Output: `build/wetgreg_hub_rtos.uf2`.
 Flash it:
 - **Hold BOOTSEL**, plug in USB → a drive named `RP2350` appears → copy the `.uf2` onto it.
 - Or, if current firmware allows: `picotool load -x build/wetgreg_hub_rtos.uf2`.
+- **Easiest:** `dev-setup/flash.sh` flashes via picotool and then pushes this computer's
+  local date/time over USB serial, so the clock is right straight away
+  (`dev-setup/flash.sh --sync` pushes the time without flashing). The DevTool flash
+  buttons do the same push automatically for WetGreg firmware.
+
+**Clock after power-off.** There is no battery-backed RTC, so after a power-off the clock
+falls back to the firmware's build time (local time — the Docker build mounts the host
+`/etc/localtime`) until a USB time push, Wi-Fi NTP, or Settings → SET TIME. The serial
+command is `TIME YYYY-MM-DD HH:MM:SS` (local time); the board replies `TIME OK ...`.
 
 **Incremental builds:** after the first `cmake`, you only re-run `ninja`. Re-run `cmake`
 only when you add files or change build options. To start clean: `rm -rf build`.

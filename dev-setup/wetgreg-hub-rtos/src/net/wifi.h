@@ -46,4 +46,15 @@ void wifi_rejoin_cancel(void);  /* drop any deferred or in-flight rejoin */
 bool wifi_rejoin_pending(void); /* deferred or in-flight rejoin exists */
 void wifi_rejoin_tick(void);    /* octopus-loop hook: fire deferred join + poll it */
 
+/* ─── WiFi power policy (g_saved.wifi_mode) ──────────────────────────────────
+ * The radio exists to set the clock. WIFI_MODE_SYNC_ONLY (default): any join
+ * — menu or background — is dropped shortly after the NTP reply lands, and a
+ * background join + sync repeats once a day (sooner if the last one failed).
+ * An associated CYW43 costs ~3–5 mA around the clock even in power-save; a
+ * 20 s sync once a day costs ~0.3 mAh. WIFI_MODE_ALWAYS keeps the link up in
+ * PM1 (aggressive power-save) for people who want the status screen live. */
+void     wifi_policy_boot(void);   /* once after saved_load(): arm the first background sync */
+void     wifi_policy_tick(void);   /* octopus-loop hook (self-gates to 1 Hz) */
+uint32_t wifi_last_sync_age_s(void); /* seconds since the last NTP sync, UINT32_MAX = never */
+
 #endif /* WIFI_H */

@@ -40,45 +40,65 @@ typedef struct {
     int8_t  sec;
 } datetime_t;
 
-/* Shared software-RTC state — defined ONCE in rtc_compat.c. These were
- * `static` (per translation unit) when the whole firmware lived in main.c;
- * with the code split into modules, every .c file would otherwise get its
- * OWN private clock and rtc_set_datetime() in one module would be invisible
- * to rtc_get_datetime() in another. */
-extern datetime_t _sw_rtc_base;
-extern uint64_t   _sw_rtc_base_us;
+/* Shared software-RTC state — defined ONCE in rtc_compat.c so every module
+ * sees the same clock. The whole clock is a single offset: local-time epoch
+ * microseconds minus time_us_64(). Keeping it as one value means a reader can
+ * never see half of an update, and the date is derived with real calendar
+ * maths, so day/month/year roll over correctly however long it runs. */
+extern volatile int64_t _sw_rtc_offset_us;
+
+/* Days since 1970-01-01 for a proleptic Gregorian y/m/d (H. Hinnant). */
+static inline int64_t _rtc_days_from_civil(int y, int m, int d) {
+    y -= m <= 2;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+static inline void _rtc_civil_from_days(int64_t z, int *y, int *m, int *d) {
+    z += 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    int64_t doe = z - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp  = (5 * doy + 2) / 153;
+    *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    *y = (int)(yoe + era * 400 + (*m <= 2));
+}
+
+static inline int64_t _rtc_read_offset(void) {
+    /* 64-bit loads aren't single-copy atomic on M33: re-read until stable. */
+    int64_t a, b;
+    do { a = _sw_rtc_offset_us; b = _sw_rtc_offset_us; } while (a != b);
+    return a;
+}
 
 static inline void rtc_init(void) {
     /* nothing to do — timer is always running */
 }
 
 static inline void rtc_set_datetime(const datetime_t *t) {
-    _sw_rtc_base    = *t;
-    _sw_rtc_base_us = time_us_64();
+    int64_t days = _rtc_days_from_civil(t->year, t->month, t->day);
+    int64_t secs = days * 86400 + t->hour * 3600 + t->min * 60 + t->sec;
+    _sw_rtc_offset_us = secs * 1000000LL - (int64_t)time_us_64();
 }
 
 static inline bool rtc_get_datetime(datetime_t *t) {
-    /* Seconds elapsed since rtc_set_datetime was called */
-    uint64_t elapsed_s = (time_us_64() - _sw_rtc_base_us) / 1000000ULL;
-
-    /* Start from the base time and add elapsed seconds */
-    *t = _sw_rtc_base;
-
-    /* Roll up seconds -> minutes -> hours -> days (simplified) */
-    int sec  = t->sec  + (int)(elapsed_s % 60);
-    int carry = sec / 60;
-    t->sec   = (int8_t)(sec % 60);
-
-    int min  = t->min  + (int)((elapsed_s / 60) % 60) + carry;
-    carry    = min / 60;
-    t->min   = (int8_t)(min % 60);
-
-    int hr   = t->hour + (int)((elapsed_s / 3600) % 24) + carry;
-    carry    = hr / 24;
-    t->hour  = (int8_t)(hr % 24);
-
-    t->day   = (int8_t)(t->day + carry);  /* simplified — no month rollover */
-
+    int64_t secs = ((int64_t)time_us_64() + _rtc_read_offset()) / 1000000LL;
+    int64_t days = secs / 86400;
+    int64_t sod  = secs % 86400;
+    int y, m, d;
+    _rtc_civil_from_days(days, &y, &m, &d);
+    t->year  = (int16_t)y;
+    t->month = (int8_t)m;
+    t->day   = (int8_t)d;
+    t->dotw  = (int8_t)((days + 4) % 7);   /* 1970-01-01 was a Thursday; 0 = Sunday */
+    t->hour  = (int8_t)(sod / 3600);
+    t->min   = (int8_t)((sod / 60) % 60);
+    t->sec   = (int8_t)(sod % 60);
     return true;
 }
 

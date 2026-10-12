@@ -21,16 +21,30 @@
 #include "wifi.h"
 
 /* ─── Draw network status screen (read-only) ─── */
+/* "SYNCED 3H AGO" / "SYNCED 12M AGO" / "NEVER SYNCED" — the clock's provenance
+ * survives the sync-only link drop (ntp_synced is cleared on disconnect). */
+static void sync_age_text(char *buf, size_t n) {
+    uint32_t age = wifi_last_sync_age_s();
+    if (age == UINT32_MAX)      snprintf(buf, n, "NEVER SYNCED");
+    else if (age < 120)         snprintf(buf, n, "SYNCED JUST NOW");
+    else if (age < 2 * 3600)    snprintf(buf, n, "SYNCED %luM AGO", (unsigned long)(age / 60));
+    else                        snprintf(buf, n, "SYNCED %luH AGO", (unsigned long)(age / 3600));
+}
+
 void render_network_screen(void) {
+    char age[24]; sync_age_text(age, sizeof(age));
+    const char *mode = g_saved.wifi_mode == WIFI_MODE_ALWAYS ? "ALWAYS ON" : "SYNC ONLY";
     if (orientation_is_tall()) {
-        static char L[6][40]; static const char *lp[6]; int n = 0;
+        static char L[8][40]; static const char *lp[8]; int n = 0;
         snprintf(L[n], 40, "WIFI: %s", wifi_enabled ? "ON" : "OFF"); lp[n] = L[n]; n++;
+        snprintf(L[n], 40, "MODE: %s", mode); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "SSID: %s", wifi_ssid_display); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "STATE: %s", !wifi_enabled ? "OFF" :
                  wifi_connected ? "CONNECTED" : "DISCONN"); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "IP: %s", wifi_connected ? wifi_ip_str : "---"); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "SIGNAL: %d dBm", wifi_connected ? (int)wifi_rssi : 0); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "NTP: %s", ntp_synced ? "SYNCED" : "NOT SYNCED"); lp[n] = L[n]; n++;
+        snprintf(L[n], 40, "TIME: %s", age); lp[n] = L[n]; n++;
         render_text_tall("WIFI STATUS", lp, n);
         return;
     }
@@ -58,8 +72,11 @@ void render_network_screen(void) {
         draw_text(10, 74, buf, IMG_W);
     }
 
-    snprintf(buf, sizeof(buf), "NTP: %s", ntp_synced ? "SYNCED" : "NOT SYNCED");
+    snprintf(buf, sizeof(buf), "NTP: %s   TIME %s", ntp_synced ? "SYNCED" : "NOT SYNCED", age);
     draw_text(10, 87, buf, IMG_W);
+
+    snprintf(buf, sizeof(buf), "MODE: %s", mode);
+    draw_text(10, 100, buf, IMG_W);
 
     draw_text(175, 110, "LEFT:BACK", IMG_W);
 }
@@ -72,9 +89,12 @@ void render_net_menu(int sel) {
 
     char buf[40];
     const char *items[NET_MENU_COUNT];
-    static char onoff_buf[20];
+    static char onoff_buf[20], mode_buf[24];
     snprintf(onoff_buf, sizeof(onoff_buf), "WIFI: %s", wifi_enabled ? "ON" : "OFF");
+    snprintf(mode_buf, sizeof(mode_buf), "MODE: %s",
+             g_saved.wifi_mode == WIFI_MODE_ALWAYS ? "ALWAYS ON" : "SYNC ONLY");
     items[NET_ITEM_ONOFF] = onoff_buf;
+    items[NET_ITEM_MODE]  = mode_buf;
     items[NET_ITEM_SCAN] = "SCAN NETWORKS";
     items[NET_ITEM_SAVED] = "SAVED NETWORKS";
     items[NET_ITEM_STATUS] = "STATUS";

@@ -28,9 +28,43 @@
 
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "hardware/sync.h"   /* __wfi() */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
+
+/* ----------------------------------------------------------------------------
+ *  0) IDLE HOOKS — put an idle core to sleep
+ * ------------------------------------------------------------------------- */
+/*  Without these, FreeRTOS's idle task is a busy loop: whenever a core has no
+ *  task to run it spins at full clock, which on this firmware is >95 % of the
+ *  time (the UI task sleeps on its input queue, the Display task on its render
+ *  queue, Housekeeping/Battery/Input in vTaskDelay). A Cortex-M33 spinning at
+ *  150 MHz is ~10 mA PER CORE from a 1000 mAh cell — the largest single line
+ *  in the power budget, and it was being paid 24/7.
+ *
+ *  WFI ("wait for interrupt") halts the core's clock until any enabled
+ *  interrupt fires: the 1 ms SysTick on this core, a GPIO/DMA/SPI/radio IRQ, or
+ *  the inter-core FIFO interrupt the SMP kernel uses to kick the other core
+ *  (portYIELD_CORE) — so scheduling latency is unchanged (≤ 1 tick) and nothing
+ *  can be "missed". The kernel's own tickless path uses the same instruction.
+ *
+ *  Both hooks exist because the SMP kernel calls vApplicationIdleHook() from
+ *  the active idle task and vApplicationPassiveIdleHook() from every idle task
+ *  (active one included); either way the effect is one WFI per idle pass. The
+ *  hooks must never block — WFI is not a block, it is a pause that any
+ *  interrupt ends. */
+void vApplicationIdleHook( void )
+{
+    __wfi();
+}
+
+#if ( configNUMBER_OF_CORES > 1 )
+void vApplicationPassiveIdleHook( void )
+{
+    __wfi();
+}
+#endif
 
 /* ----------------------------------------------------------------------------
  *  A) ERROR HOOKS

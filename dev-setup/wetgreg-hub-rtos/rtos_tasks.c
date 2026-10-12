@@ -11,8 +11,10 @@
  * ========================================================================== */
 
 #include "rtos_tasks.h"
+#include "rtc_clock.h"     /* clock_serial_poll — time pushed over USB serial */
 #include "pico/flash.h"   /* flash_safe_execute_core_init — core-1 side of safe flash writes */
 #include "hardware/watchdog.h"   /* watchdog_reboot — hard-reboot escape hatch */
+#include "pico/time.h"           /* to_ms_since_boot — the UI idle clock */
 #include <string.h>
 #include <stdio.h>
 
@@ -96,6 +98,11 @@ void rtos_wait_flash_ready(void) {
  * ------------------------------------------------------------------------- */
 void display_render(void) {
     if (!g_free_q) return;              /* not started yet — nothing to do */
+    /* Pixel-identical to what the panel already shows? Then there is nothing
+     * to do: the e-ink holds its image for free, and a redundant partial
+     * refresh would only burn the booster for ~0.5 s. Menus and info screens
+     * re-render on every poll timeout, so this is the common case. */
+    if (display_frame_unchanged()) return;
     int idx;
     /* Claim a free buffer (block if both are in flight — correct throttling: the
      * panel can't show frames faster than ~300 ms anyway, and the Input task
@@ -109,12 +116,27 @@ void rtos_display_cmd(int cmd) {
     /* Rides the render queue so it lands strictly AFTER any queued frame — the
      * STATE_SLEEP path renders its final still, then queues DISP_CMD_SLEEP. */
     if (!g_render_q) return;
+    /* A wake re-inits + clears the panel, so whatever we last sent is gone
+     * from the glass: the next frame must be pushed even if it is identical. */
+    if (cmd == DISP_CMD_WAKE) display_invalidate_last();
     xQueueSend(g_render_q, &cmd, portMAX_DELAY);
 }
 
+/* Time of the last press the UI consumed — the "user is still here" clock the
+ * sub-screens use to fall back to the octopus (and from there to sleep) when
+ * Greg is left in a menu. Lives here so EVERY consumer of ui_get_input() feeds
+ * it, without per-screen bookkeeping. */
+static volatile uint32_t g_ui_last_input_ms = 0;
+
 bool ui_get_input(uint8_t *code, uint32_t timeout_ms) {
     if (!g_input_q) { vTaskDelay(pdMS_TO_TICKS(timeout_ms)); return false; }
-    return xQueueReceive(g_input_q, code, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    bool got = xQueueReceive(g_input_q, code, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    if (got) g_ui_last_input_ms = to_ms_since_boot(get_absolute_time());
+    return got;
+}
+
+bool ui_idle_for(uint32_t ms) {
+    return to_ms_since_boot(get_absolute_time()) - g_ui_last_input_ms >= ms;
 }
 
 /* The e-ink is "busy" whenever a frame is in flight — i.e. fewer than both
@@ -297,6 +319,7 @@ static void batt_task(void *arg) {
     (void)arg;
     for (;;) {
         batt_sample();                  /* main.c: VSYS/USB via cyw43-locked ADC -> g_batt_v/pct/on_usb */
+        clock_serial_poll();            /* USB "TIME ..." push from the flash tooling (may stall on stdio lock) */
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

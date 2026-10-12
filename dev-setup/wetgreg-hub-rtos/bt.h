@@ -8,6 +8,11 @@ typedef enum { BT_OFF, BT_STARTING, BT_ADVERTISING, BT_CONNECTED, BT_PAIRING, BT
 
 void        wetgreg_bt_init(void);    /* one-time: HCI/GATT/SM setup + power on + advertise */
 void        wetgreg_bt_stop(void);    /* stop advertising + power off */
+void        wetgreg_bt_arch_reset(void); /* after cyw43_arch_deinit(): the stack is gone, redo setup next init */
+/* Radio duty (see bt.c): background = slow adverts + 5 % scan. Boost while a
+ * discovery screen is open so results land in under a second. */
+void        wetgreg_bt_boost(bool on);          /* fast adverts (Bluetooth / SCAN NEARBY screens) */
+void        wetgreg_social_scan_boost(bool on); /* 50 % scan duty (SCAN NEARBY screen only) */
 bt_state_t  wetgreg_bt_state(void);
 const char *wetgreg_bt_peer(void);    /* connected peer address, "" if none */
 bool        wetgreg_bt_active(void);  /* true once init'd — poll cyw43 while active */

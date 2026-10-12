@@ -26,6 +26,9 @@ services:
       - ./wetgreg-hub-rtos:/project
       - ../FreeRTOS-Kernel:/FreeRTOS-Kernel
       - ../picowota:/picowota
+      # Host time zone, so __DATE__/__TIME__ (the clock seed used after a
+      # power-off) is local time rather than the container's UTC.
+      - /etc/localtime:/etc/localtime:ro
     working_dir: /project
     environment:
       - FREERTOS_KERNEL_PATH=/FreeRTOS-Kernel

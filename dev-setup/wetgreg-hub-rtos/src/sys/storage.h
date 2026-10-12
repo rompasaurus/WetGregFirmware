@@ -44,7 +44,16 @@ typedef struct {
      * no SAVED_MAGIC bump needed). ── */
     uint8_t      auto_rotate;          /* 1 = accelerometer auto-rotate (default), 0 = manual */
     uint8_t      manual_orient;        /* OR_LAND_R/OR_LAND_L/OR_TALL when auto_rotate==0 */
+    /* ── Battery calibration + WiFi policy (appended; 0xFF on old images →
+     * sanitised to defaults on load, no SAVED_MAGIC bump). ── */
+    uint16_t     batt_offset_mv;       /* additive VSYS→cell offset (battery.h); 0xFFFF = unset */
+    uint8_t      batt_offset_src;      /* 'D' default / 'A' auto-anchor / 'M' manual */
+    uint8_t      wifi_mode;            /* WIFI_MODE_SYNC_ONLY (default) / WIFI_MODE_ALWAYS */
+    char         last_ssid[33];        /* last network joined — the daily time-sync target */
 } saved_store_t;
+
+#define WIFI_MODE_SYNC_ONLY 0          /* join → NTP → drop (and once a day in the background) */
+#define WIFI_MODE_ALWAYS    1          /* stay associated (PM1 power-save) until told otherwise */
 
 /* The in-RAM copy of the store. Mutate ONLY through the functions below (they
  * persist), except g_saved.auto_rotate/manual_orient which the Display-settings
@@ -64,6 +73,11 @@ void        saved_forget(int idx);
 uint32_t    wetgreg_today(void);       /* calendar-day key for the re-greet cooldown */
 void        met_record(uint16_t id, uint8_t flag, uint32_t day);
 bool        met_should_greet(uint16_t id);
+
+/* Battery calibration + WiFi policy (persist) */
+void        battery_offset_store(uint16_t mv);   /* called by battery.c; stores g_batt_offset_src too */
+void        wifi_mode_store(uint8_t mode);
+void        wifi_last_ssid_store(const char *ssid); /* no-op (no flash wear) when unchanged */
 
 /* Identity */
 void        wetgreg_set_name(const char *name);

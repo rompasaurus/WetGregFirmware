@@ -60,6 +60,14 @@
 static uint8_t ui_buf[DISPLAY_BUF_SIZE];
 static uint8_t display_buf[2][DISPLAY_BUF_SIZE];
 
+/* The last panel image actually handed to the Display task. Every menu and
+ * sub-screen re-renders on its input-poll timeout (so rotation / live values
+ * update), and most of those re-renders are pixel-identical — pushing them
+ * to the glass costs a ~0.5 s booster-on waveform each (~5 mAs) for nothing.
+ * display_render() compares against this copy and skips identical frames. */
+static uint8_t last_sent[DISPLAY_BUF_SIZE];
+static bool    last_sent_valid = false;
+
 /* ─── Transpose landscape → portrait for the e-ink driver ───
  * Map the active canvas onto the fixed 122x250 panel at display_rotation.
  *   90 / 270  → WIDE canvas (250x122): legacy 90 = current view
@@ -95,7 +103,15 @@ void transpose_to_display(void) {
  *                     free Display buffer `idx` (a cheap 4000-byte copy).
  * display_blit      : Display task (core 1) — the actual ~300 ms panel refresh.
  * display_init_panel: Display task prologue — bring the panel up from core 1. */
-void display_grab_into(int idx)   { memcpy(display_buf[idx], ui_buf, sizeof(ui_buf)); }
+void display_grab_into(int idx) {
+    memcpy(display_buf[idx], ui_buf, sizeof(ui_buf));
+    memcpy(last_sent, ui_buf, sizeof(ui_buf));
+    last_sent_valid = true;
+}
+bool display_frame_unchanged(void) {
+    return last_sent_valid && memcmp(ui_buf, last_sent, sizeof(ui_buf)) == 0;
+}
+void display_invalidate_last(void)  { last_sent_valid = false; }
 void display_blit(int idx)        { EPD_Partial(display_buf[idx]); }
 void display_init_panel(void)     { EPD_Init(); EPD_Clear(); }
 void display_panel_cmd(int cmd) {

@@ -293,12 +293,21 @@ void render_sound_menu(int sel) {
 }
 
 /* ─── Draw device info screen ─── */
+/* "~18H" / "~18H*" (* = nominal-draw estimate, no measured rate yet) / "" on USB. */
+static void hours_left_text(char *buf, size_t n) {
+    float h = g_batt_hours_left;
+    if (h < 0.0f) { buf[0] = '\0'; return; }
+    if (h >= 99.0f) h = 99.0f;
+    snprintf(buf, n, "~%.0fH%s", (double)h, g_batt_hours_est ? "*" : "");
+}
+
 void render_info_screen(void) {
     int   pct  = g_batt_pct;   /* filtered (batt_sample) — consistent with the icon */
     float vsys = g_batt_v;
+    char  left[12]; hours_left_text(left, sizeof(left));
 
     if (orientation_is_tall()) {
-        static char L[9][40]; static const char *lp[9]; int n = 0;
+        static char L[10][40]; static const char *lp[10]; int n = 0;
         datetime_t t; rtc_get_datetime(&t);
         int h = t.hour % 12; if (h == 0) h = 12;
         snprintf(L[n], 40, "FW V%s", WETGREG_VERSION); lp[n] = L[n]; n++;
@@ -310,8 +319,10 @@ void render_info_screen(void) {
         if (pct < 0) snprintf(L[n], 40, "USB %.2fV", (double)vsys);
         else         snprintf(L[n], 40, "BATT %d%% %.2fV", pct, (double)vsys);
         lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "CAL x%.3f", (double)g_vsys_cal); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "UP:CAL FULL=4.2"); lp[n] = L[n]; n++;
+        if (pct >= 0) { snprintf(L[n], 40, "LEFT %s", left); lp[n] = L[n]; n++; }
+        snprintf(L[n], 40, "RAW %.2fV +%umV %c", (double)g_batt_raw_v,
+                 (unsigned)g_batt_offset_mv, g_batt_offset_src); lp[n] = L[n]; n++;
+        snprintf(L[n], 40, "UP:CAL FULL DN:RST"); lp[n] = L[n]; n++;
         render_text_tall("DEVICE INFO", lp, n);
         return;
     }
@@ -341,14 +352,17 @@ void render_info_screen(void) {
     snprintf(buf, sizeof(buf), "WIFI: %s", wifi_connected ? wifi_ip_str : "OFF");
     draw_text(10, y, buf, IMG_W); y += 11;
 
-    /* Battery / power status — show the live voltage to 2 decimals + cal trim. */
+    /* Battery / power status — filtered cell estimate, time left, and the raw
+     * ADC reading + the persisted offset (D default / A auto-anchored / M manual)
+     * so a bench check against a meter is a one-glance affair. */
     if (pct < 0) {
-        snprintf(buf, sizeof(buf), "POWER: USB  %.2fV  (CAL x%.3f)",
-                 (double)vsys, (double)g_vsys_cal);
+        snprintf(buf, sizeof(buf), "POWER: USB  RAIL %.2fV", (double)vsys);
     } else {
-        snprintf(buf, sizeof(buf), "BATTERY: %d%%  %.2fV  (CAL x%.3f)",
-                 pct, (double)vsys, (double)g_vsys_cal);
+        snprintf(buf, sizeof(buf), "BATTERY: %d%%  %.2fV  %s LEFT", pct, (double)vsys, left);
     }
+    draw_text(10, y, buf, IMG_W); y += 11;
+    snprintf(buf, sizeof(buf), "RAW %.2fV + %umV OFFSET (%c)",
+             (double)g_batt_raw_v, (unsigned)g_batt_offset_mv, g_batt_offset_src);
     draw_text(10, y, buf, IMG_W); y += 11;
 
     draw_text(10, 100, "UP:CAL FULL=4.2V  DN:RESET CAL", IMG_W);

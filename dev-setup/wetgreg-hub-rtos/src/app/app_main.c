@@ -101,6 +101,18 @@
 /* Bluetooth is OFF by default to save power; toggled on in the Bluetooth screen. */
 static bool bt_enabled = false;
 
+/* Sub-screens fall back to the octopus screen after this long without a press
+ * (and from there Greg can doze off). Before this, a Greg left in any menu
+ * re-rendered that menu every 4 s forever and could never auto-sleep — a
+ * reliable way to find a flat battery in the morning. The password keyboard
+ * gets 3× the allowance. */
+#define UI_IDLE_RETURN_MS   90000u
+#define UI_IDLE_NEARBY_MS   120000u   /* SCAN NEARBY runs the radio at 50 % duty */
+
+/* Critical-battery hold: Greg wakes on CENTER so the "CHARGE ME" still can be
+ * read, then goes back to sleep after this long if the cell is still flat. */
+#define BATT_CRIT_AWAKE_MS  15000u
+
 /* ─── Pick a quote matching current_mood, or random if -1 ─── */
 static int pick_quote(void) {
     if (current_mood < 0)
@@ -232,6 +244,7 @@ static void app_task(void *param) {
      * flash on first boot — so that write is SMP-safe (core 1 parked, no XIP fault). */
     rtos_wait_flash_ready();
     saved_load();   /* load cached WiFi networks (seeds Moop Ship + MoopsterCell) */
+    wifi_policy_boot();   /* arm the background time sync (never blocks boot) */
 
     /* Social: bake our id into the beacon, and resume scanning if it was left on. */
     wetgreg_social_set_self(g_saved.wetgreg_id);
@@ -261,16 +274,25 @@ static void app_task(void *param) {
 
     uint32_t tap_t0 = 0;   /* CENTER-mash sleep trigger: window start ... */
     int      tap_n  = 0;   /* ... and presses seen inside it (see SLEEP_TAP_*) */
+    uint32_t awake_since_ms = to_ms_since_boot(get_absolute_time());   /* boot / last wake */
 
     /* Sub-screen input: block on the Input task's event queue for up to `ms` ms.
      * The do-while(0) PRESERVES the old `break;` semantics in every screen body —
      * a `break` leaves the poll, then the case's trailing `break` triggers the
      * redraw — but with NO busy-wait: the UI sleeps until a press arrives or the
-     * timeout elapses (the Input task captures presses meanwhile). */
+     * timeout elapses (the Input task captures presses meanwhile).
+     * A timeout with no press for UI_IDLE_RETURN_MS sends the screen back to
+     * the octopus (the identical re-render costs nothing — display_render()
+     * skips frames the panel already shows). */
     #define POLL_INPUT(ms) \
         do { \
             uint8_t inp; \
-            if (!ui_get_input(&inp, (ms))) break;
+            if (!ui_get_input(&inp, (ms))) { \
+                if (ui_idle_for(state == STATE_NET_KEYBOARD ? 3u * UI_IDLE_RETURN_MS \
+                                                            : UI_IDLE_RETURN_MS)) \
+                    state = STATE_OCTOPUS; \
+                break; \
+            }
     #define POLL_END } while (0);
 
     while (true) {
@@ -371,15 +393,23 @@ static void app_task(void *param) {
             sensor_snapshot_t s; rtos_snapshot_get(&s);
             uint8_t o0    = s.orientation;
             bool    idle0 = g_screen_idle;
-            /* While charging, animate ~10x less often (each tick is ~15 ms, so
-             * 200=~3 s normally, 2000=~30 s on USB) to cut e-ink refresh load and
-             * let the cell charge. Input still polled every tick, so it stays
-             * responsive — only the idle animation cadence slows. */
-            int octo_ticks = g_on_usb ? 2000 : 200;
+            /* ~3 s between frames (each tick is ~15 ms). The old "animate 10×
+             * slower on USB" diet is gone: the netlist shows the Pico is fed
+             * from VBUS while USB is present (D3 is reverse-biased), so the
+             * display never competed with the charger — the TP4056 charges at
+             * its full programmed current regardless of what Greg is doing. */
+            const int octo_ticks = 200;
             for (int i = 0; i < octo_ticks && state == STATE_OCTOPUS; i++) {
                 uint8_t inp;
                 bool got = ui_get_input(&inp, 15);     /* ~15 ms tick; sleeps efficiently */
                 rtos_snapshot_get(&s);
+                /* Flat cell: force the nap (CHARGE ME still) once the user has
+                 * had a moment to read the screen after a wake. */
+                if (g_batt_critical &&
+                    to_ms_since_boot(get_absolute_time()) - awake_since_ms >= BATT_CRIT_AWAKE_MS) {
+                    state = STATE_SLEEP;
+                    break;
+                }
                 /* Idle flag is owned by Housekeeping (it freezes redraws when
                  * pocketed). Just re-enter the case on a change so the render
                  * gate (if !g_screen_idle) re-evaluates — do NOT wake_screen here
@@ -404,6 +434,7 @@ static void app_task(void *param) {
                     break;
                 }
                 wifi_rejoin_tick();                    /* deferred post-wake wifi rejoin */
+                wifi_policy_tick();                    /* sync-only drop / daily background sync */
                 if (wetgreg_bt_active() && wetgreg_bt_take_command() >= 0) {
                     qi = pick_quote();   /* phone poked us → fresh quote */
                     speaker_tone(1600, 60);
@@ -465,6 +496,16 @@ static void app_task(void *param) {
                 /* Entry: one still — Greg in his nightcap — then power down.
                  * No animation on purpose: the e-ink holds the image free. */
                 render_sleep_screen();
+                if (g_batt_critical) {
+                    /* Swap the footer for the reason: this nap is not optional. */
+                    if (orientation_is_tall()) {
+                        clear_rows(234, 249);
+                        draw_text(4, 238, "LOW BATT - CHARGE ME", 122);
+                    } else {
+                        clear_rows(110, 121);
+                        draw_text(35, 113, "LOW BATTERY - PLEASE CHARGE ME", 250);
+                    }
+                }
                 draw_orient_hud();
                 transpose_to_display();
                 display_render();
@@ -482,6 +523,7 @@ static void app_task(void *param) {
                 speaker_tone(784, 60); speaker_tone(1047, 60); speaker_tone(1319, 100);
                 qi = pick_quote();
                 frame_idx = 0;
+                awake_since_ms = to_ms_since_boot(get_absolute_time());
                 wake_screen();
                 state = STATE_OCTOPUS;
             }
@@ -515,7 +557,10 @@ static void app_task(void *param) {
                 if (orientation_is_tall() != was_tall) {   /* rotated → redraw */
                     was_tall = orientation_is_tall(); need_draw = true; continue;
                 }
-                if (!got) continue;
+                if (!got) {
+                    if (ui_idle_for(UI_IDLE_RETURN_MS)) { state = STATE_OCTOPUS; break; }
+                    continue;
+                }
 
                 /* Fold a run of held UP/DOWN repeats into a SINGLE move so a fast
                  * scroll repaints once at the end (not once per ~120 ms repeat
@@ -863,20 +908,17 @@ static void app_task(void *param) {
                     state = STATE_MENU;
                     speaker_tone(500, 50); break;
                 }
-                if (inp == INPUT_UP) {        /* calibrate: treat current reading as a full 4.20 V pack */
-                    /* Trim against the SAME filtered value the icon shows (g_batt_v),
-                     * so the cal target matches the displayed estimator. Off-USB
-                     * only — on USB the rail isn't the resting pack voltage. */
-                    if (g_batt_pct >= 0 && g_batt_v > 2.0f) {
-                        battery_cal_save(g_vsys_cal * 4.20f / g_batt_v);
-                        speaker_tone(1500, 80);
-                    } else {
-                        speaker_tone(300, 120);   /* refuse on USB / before first reading */
-                    }
-                    break;                    /* re-render with the new CAL/% */
+                if (inp == INPUT_UP) {        /* calibrate: the cell is FULL right now (just unplugged) */
+                    /* Anchors the persisted offset so the current raw reading
+                     * maps to a full cell. Off-USB only — on USB the rail isn't
+                     * the pack. (The same anchor also happens automatically on
+                     * every unplug after a long charge; this is the manual one.) */
+                    if (battery_anchor_full_now()) speaker_tone(1500, 80);
+                    else                           speaker_tone(300, 120);   /* refused */
+                    break;                    /* re-render with the new offset/% */
                 }
-                if (inp == INPUT_DOWN) {      /* reset calibration */
-                    battery_cal_save(1.0f); speaker_tone(700, 60);
+                if (inp == INPUT_DOWN) {      /* reset calibration to the default */
+                    battery_offset_reset(); speaker_tone(700, 60);
                     break;
                 }
             POLL_END
@@ -909,6 +951,10 @@ static void app_task(void *param) {
                         case NET_ITEM_ONOFF:
                             if (wifi_enabled) wifi_disconnect();
                             else wifi_connect();
+                            break;
+                        case NET_ITEM_MODE:    /* SYNC ONLY ⇄ ALWAYS ON (persisted) */
+                            wifi_mode_store(g_saved.wifi_mode == WIFI_MODE_ALWAYS
+                                            ? WIFI_MODE_SYNC_ONLY : WIFI_MODE_ALWAYS);
                             break;
                         case NET_ITEM_SCAN:
                             wifi_start_scan();
@@ -957,6 +1003,7 @@ static void app_task(void *param) {
         /* ════════ BLUETOOTH ════════ */
         case STATE_BLUETOOTH: {
             if (bt_enabled && !wetgreg_bt_active()) wetgreg_bt_init();    /* resume if left on */
+            wetgreg_bt_boost(true);           /* fast adverts while the pairing screen is up */
             bt_state_t shown = (bt_state_t)255;
             int  was_tall  = orientation_is_tall();
             bool shown_en  = !bt_enabled;     /* mismatch forces the first render */
@@ -973,7 +1020,10 @@ static void app_task(void *param) {
                 /* Wake on a press, or every 250 ms to re-check the live BLE state
                  * (the cyw43 background task drives pairing/connection changes). */
                 uint8_t inp;
-                if (!ui_get_input(&inp, 250)) continue;   /* timeout → re-check state */
+                if (!ui_get_input(&inp, 250)) {           /* timeout → re-check state */
+                    if (ui_idle_for(UI_IDLE_RETURN_MS)) { state = STATE_OCTOPUS; break; }
+                    continue;
+                }
                 if (inp == INPUT_LEFT) {
                     speaker_tone(500, 40); state = STATE_SETTINGS; break;
                 }
@@ -988,6 +1038,7 @@ static void app_task(void *param) {
                     }
                 }
             }
+            wetgreg_bt_boost(false);
             break;
         }
 
@@ -1077,10 +1128,14 @@ static void app_task(void *param) {
 
         /* ════════ SCAN NEARBY (live, in-range WetGregs) ════════ */
         case STATE_SOCIAL_NEARBY: {
-            /* Make sure scanning is live for the duration of this screen. */
+            /* Make sure scanning is live for the duration of this screen, at
+             * the foreground duty (50 % scan, fast adverts) so results appear
+             * in under a second — the background profile is a 5 % trickle. */
             if (!wetgreg_bt_active()) { wetgreg_bt_init(); bt_enabled = true; }
             wetgreg_social_set_self(g_saved.wetgreg_id);
             wetgreg_social_enable(true);
+            wetgreg_social_scan_boost(true);
+            wetgreg_bt_boost(true);
 
             int last_count = -1, last_sel = -1, last_tall = -1;
             for (;;) {
@@ -1110,7 +1165,13 @@ static void app_task(void *param) {
                     last_count = g_nearby_count; last_sel = nearby_sel; last_tall = tall_now;
                 }
                 uint8_t inp;
-                if (!ui_get_input(&inp, 300)) continue;   /* keep scanning between presses */
+                if (!ui_get_input(&inp, 300)) {           /* keep scanning between presses */
+                    if (ui_idle_for(UI_IDLE_NEARBY_MS)) {   /* ... but not forever at 50 % duty */
+                        if (!g_saved.social_on) wetgreg_social_enable(false);
+                        state = STATE_OCTOPUS; break;
+                    }
+                    continue;
+                }
                 if (inp == INPUT_LEFT) {
                     if (!g_saved.social_on) wetgreg_social_enable(false);   /* stop scan if not opted-in */
                     state = STATE_SOCIAL; speaker_tone(500, 50); break;
@@ -1125,6 +1186,8 @@ static void app_task(void *param) {
                     state = STATE_EMOTE_PICK; break;
                 }
             }
+            wetgreg_social_scan_boost(false);   /* back to the 5 % background trickle */
+            wetgreg_bt_boost(false);
             break;
         }
 

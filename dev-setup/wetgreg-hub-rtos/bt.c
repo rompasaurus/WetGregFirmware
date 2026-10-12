@@ -66,6 +66,33 @@ static uint16_t g_self_id   = 0;
 static volatile bool g_social = false;    /* desired: scan for WetGregs */
 static bool     g_scanning  = false;      /* actual scan state (run-loop owned) */
 
+/* ── Radio duty profiles ──
+ * Advertising and scanning are the two continuous BLE costs. The old settings
+ * (advert every 30 ms = the fastest the spec allows, scan 30 ms of every
+ * 200 ms) kept the CYW43's BT core busy ~20 % of the time just to be seen —
+ * roughly 8–10 mA, the largest radio line in the battery budget.
+ *
+ * Discovery is a two-sided dice roll: a peer's advert is caught when one of
+ * its advertising events lands inside one of our scan windows. With adverts
+ * every 250 ms and a 64 ms window every 1280 ms (5 %), a window catches an
+ * advert with p ≈ (64+1.5)/250 ≈ 26 %, i.e. one sighting every ~5 s — plenty
+ * to notice another Greg walking past, at ~1/4 of the old scan cost and ~1/8
+ * of the old advertising cost. While a directed emote is being broadcast (15 s)
+ * the advert goes back to 30 ms so the 5 % scanner on the other side can't
+ * miss it (p(miss over 15 s) ≈ 0); while SCAN NEARBY / the Bluetooth screen
+ * is open both sides go fast for sub-second results. Units: 0.625 ms. */
+#define ADV_INT_FAST   0x0030   /*  30 ms — emote burst / discovery screens      */
+#define ADV_INT_SLOW   0x0190   /* 250 ms — background beacon                    */
+#define SCAN_INT_BG    0x0800   /* 1280 ms interval ...                          */
+#define SCAN_WIN_BG    0x0066   /* ...  64 ms window  (5 % duty)                 */
+#define SCAN_INT_FG    0x00A0   /*  100 ms interval ...                          */
+#define SCAN_WIN_FG    0x0050   /* ...  50 ms window  (50 % — SCAN NEARBY only)  */
+
+static volatile bool g_scan_boost = false;   /* desired: foreground scan profile */
+static volatile bool g_adv_boost  = false;   /* desired: fast adverts (discovery screen) */
+static bool g_scan_fast_applied = false;     /* run-loop owned: profile currently in HCI */
+static bool g_adv_fast_applied  = false;
+
 /* App-set intent for the directed emote (latest-wins; older sends are thrown out). */
 static volatile uint16_t g_want_target = 0;
 static volatile uint8_t  g_want_emote  = 0;
@@ -88,13 +115,26 @@ static uint32_t g_last_seen_ms = 0;
 /* Periodic worker — runs ONLY in the BT run-loop context (re-arms itself). It
  * reconciles the scan state, applies a dirty advert once, and expires the
  * directed emote. ~250 ms cadence keeps HCI traffic and radio duty low. */
+static void apply_adv_params(bool fast) {
+    uint16_t iv = fast ? ADV_INT_FAST : ADV_INT_SLOW;
+    bd_addr_t null_addr; memset(null_addr, 0, sizeof(null_addr));
+    /* BTstack re-issues the params (and bounces advertising if it is live). */
+    gap_advertisements_set_params(iv, iv, 0, 0, null_addr, 0x07, 0x00);
+    g_adv_fast_applied = fast;
+}
+
 static void g_social_tick(btstack_timer_source_t *ts) {
     if (g_active) {
-        /* reconcile scanning to the desired state */
+        bool want_fast_scan = g_scan_boost;
+        /* reconcile scanning to the desired state + profile */
+        if (g_scanning && g_social && want_fast_scan != g_scan_fast_applied) {
+            gap_stop_scan();              /* profile change: restart with new params */
+            g_scanning = false;
+        }
         if (g_social && !g_scanning) {
-            /* low duty: 30 ms window every 200 ms ≈ 15% — far less overhead/flood
-             * than the old continuous (window==interval) scan. */
-            gap_set_scan_parameters(0 /* passive */, 0x0140, 0x0030);
+            if (want_fast_scan) gap_set_scan_parameters(0 /* passive */, SCAN_INT_FG, SCAN_WIN_FG);
+            else                gap_set_scan_parameters(0 /* passive */, SCAN_INT_BG, SCAN_WIN_BG);
+            g_scan_fast_applied = want_fast_scan;
             gap_start_scan();
             g_scanning = true;
         } else if (!g_social && g_scanning) {
@@ -105,6 +145,9 @@ static void g_social_tick(btstack_timer_source_t *ts) {
         if (g_want_ttl > 0 && --g_want_ttl == 0) {
             g_want_target = 0; g_want_emote = 0; g_adv_dirty = true;
         }
+        /* advert cadence: fast only while it matters */
+        bool want_fast_adv = g_adv_boost || g_want_ttl > 0;
+        if (want_fast_adv != g_adv_fast_applied) apply_adv_params(want_fast_adv);
         /* apply the advert at most once per change (coalesces rapid sends) */
         if (g_adv_dirty) {
             g_adv_dirty = false;
@@ -123,9 +166,7 @@ static void g_social_tick(btstack_timer_source_t *ts) {
 }
 
 static void start_advertising(void) {
-    uint16_t adv_int_min = 0x0030, adv_int_max = 0x0030;
-    bd_addr_t null_addr; memset(null_addr, 0, sizeof(null_addr));
-    gap_advertisements_set_params(adv_int_min, adv_int_max, 0, 0, null_addr, 0x07, 0x00);
+    apply_adv_params(g_adv_boost || g_want_ttl > 0);
     gap_advertisements_set_data(sizeof(adv_data), (uint8_t *)adv_data);
     gap_advertisements_enable(1);
     g_state = BT_ADVERTISING;
@@ -302,6 +343,29 @@ void wetgreg_bt_stop(void) {
     g_passkey = 0;
     g_peer[0] = '\0';
 }
+
+/* cyw43_arch_deinit() tears the whole BTstack instance down (hci_close +
+ * btstack_memory_deinit); cyw43_arch_init() builds a fresh one. Everything we
+ * registered on the old instance is gone, so the next wetgreg_bt_init() must
+ * redo the one-time setup, and the run-loop timer must be re-armed. Call this
+ * strictly between the deinit and the next bt_init (STATE_SLEEP, SLEEP_CYW43_OFF). */
+void wetgreg_bt_arch_reset(void) {
+    g_setup_done       = false;
+    g_social_timer_on  = false;
+    g_active           = false;
+    g_state            = BT_OFF;
+    g_scanning         = false;
+    g_scan_fast_applied = false;
+    g_adv_fast_applied  = false;
+    g_con              = HCI_CON_HANDLE_INVALID;
+    g_notify           = false;
+    g_passkey          = 0;
+    g_peer[0]          = '\0';
+    g_adv_dirty        = true;
+}
+
+void wetgreg_bt_boost(bool on)          { g_adv_boost  = on; }
+void wetgreg_social_scan_boost(bool on) { g_scan_boost = on; }
 
 void wetgreg_bt_set_status(const char *s) {
     if (!s) return;

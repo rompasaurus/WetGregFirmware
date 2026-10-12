@@ -103,6 +103,10 @@ void saved_seed_defaults(void) {
     g_saved.met_count = 0;
     g_saved.auto_rotate = 1;          /* auto-rotate ON by default */
     g_saved.manual_orient = OR_TALL;
+    g_saved.batt_offset_mv  = BATT_OFFSET_DEFAULT_MV;
+    g_saved.batt_offset_src = 'D';
+    g_saved.wifi_mode       = WIFI_MODE_SYNC_ONLY;
+    g_saved.last_ssid[0]    = '\0';
 }
 
 void saved_load(void) {
@@ -113,14 +117,19 @@ void saved_load(void) {
         saved_seed_defaults();   /* first boot — persist the two defaults */
         saved_write_flash();
     }
-    /* Battery trim is NOT loaded from flash anymore: the measurement uses the
-     * baked nominal estimate (VSYS_CAL, the 3:1-divider + 3.3 V-ref math) every
-     * boot, so the device needs no calibration ritual. The 4-bar icon doesn't
-     * need per-board precision, and the peak-hold estimator removes the load
-     * bias that used to make calibration seem necessary. The Device-Info UP/DOWN
-     * keys remain as an OPTIONAL live trim (not persisted). For real per-board
-     * accuracy, Rev 2 will auto-anchor to 4.2 V off the TP4056 STDBY pin. */
-    battery_cal_save(1.0f);
+    /* Battery calibration: the additive VSYS→cell offset is PERSISTED now (it
+     * folds the per-board D3 diode drop and ADC-path error into one number,
+     * see battery.h). Old images read 0xFFFF here → start from the default;
+     * the auto-anchor after the next long USB charge takes it from there. */
+    if (g_saved.batt_offset_mv < BATT_OFFSET_MIN_MV || g_saved.batt_offset_mv > BATT_OFFSET_MAX_MV) {
+        g_saved.batt_offset_mv  = BATT_OFFSET_DEFAULT_MV;
+        g_saved.batt_offset_src = 'D';
+    }
+    if (g_saved.batt_offset_src != 'A' && g_saved.batt_offset_src != 'M') g_saved.batt_offset_src = 'D';
+    battery_set_offset_mv(g_saved.batt_offset_mv, (char)g_saved.batt_offset_src);
+    if (g_saved.wifi_mode > WIFI_MODE_ALWAYS) g_saved.wifi_mode = WIFI_MODE_SYNC_ONLY;
+    if ((uint8_t)g_saved.last_ssid[0] == 0xFF) g_saved.last_ssid[0] = '\0';
+    g_saved.last_ssid[sizeof(g_saved.last_ssid) - 1] = '\0';
 
     /* Assign a persistent social id on first ever boot (and defend against a
      * zeroed/sanitised field). rng is already seeded before the scheduler. */
@@ -213,6 +222,27 @@ bool met_should_greet(uint16_t id) {
     int idx = met_find(id);
     if (idx < 0) return true;                       /* never met */
     return g_saved.met[idx].last_day != wetgreg_today();
+}
+
+/* ─── Battery calibration + WiFi policy ─── */
+void battery_offset_store(uint16_t mv) {
+    if (g_saved.batt_offset_mv == mv && g_saved.batt_offset_src == (uint8_t)g_batt_offset_src) return;
+    g_saved.batt_offset_mv  = mv;
+    g_saved.batt_offset_src = (uint8_t)g_batt_offset_src;
+    saved_write_flash();
+}
+
+void wifi_mode_store(uint8_t mode) {
+    if (mode > WIFI_MODE_ALWAYS) mode = WIFI_MODE_SYNC_ONLY;
+    if (g_saved.wifi_mode == mode) return;
+    g_saved.wifi_mode = mode;
+    saved_write_flash();
+}
+
+void wifi_last_ssid_store(const char *ssid) {
+    if (!ssid || strcmp(g_saved.last_ssid, ssid) == 0) return;
+    snprintf(g_saved.last_ssid, sizeof(g_saved.last_ssid), "%s", ssid);
+    saved_write_flash();
 }
 
 void wetgreg_set_name(const char *name) {

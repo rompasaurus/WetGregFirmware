@@ -150,6 +150,23 @@ target_link_libraries(wetgreg_hub_rtos pico_btstack_ble pico_btstack_cyw43)
 # Generate wetgreg.h (the GATT database "profile_data") from wetgreg.gatt.
 pico_btstack_make_gatt_header(wetgreg_hub_rtos PRIVATE ${CMAKE_CURRENT_LIST_DIR}/wetgreg.gatt)
 
+# --- Power / battery build options (see src/sys/power.h, src/drivers/battery.h) ---
+#   -DSLEEP_CYW43_OFF=ON          power the CYW43 down completely while asleep
+#                                 (bench-test with serial attached first)
+#   -DBATT_DIRECT_ADC_GPIO=26     read the cell through a direct 1M/1M divider on
+#                                 that ADC-capable GPIO instead of VSYS behind D3
+#   -DBATT_DIRECT_DIVIDER=2.0     divider ratio for the direct path (default 2.0)
+#   -DBATT_OFFSET_DEFAULT_MV=460  starting VSYS->cell offset before auto-anchoring
+option(SLEEP_CYW43_OFF "Power the CYW43 down completely in the sleep state" OFF)
+if(SLEEP_CYW43_OFF)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE SLEEP_CYW43_OFF=1)
+endif()
+foreach(opt BATT_DIRECT_ADC_GPIO BATT_DIRECT_DIVIDER BATT_OFFSET_DEFAULT_MV)
+    if(DEFINED ${opt})
+        target_compile_definitions(wetgreg_hub_rtos PRIVATE ${opt}=${${opt}})
+    endif()
+endforeach()
+
 # --- Wi-Fi credentials (pass via -D or edit wifi_config.h) -------------------
 if(DEFINED WIFI_SSID)
     target_compile_definitions(wetgreg_hub_rtos PRIVATE WIFI_SSID="${WIFI_SSID}")
