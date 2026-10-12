@@ -320,6 +320,7 @@ static void batt_task(void *arg) {
     for (;;) {
         batt_sample();                  /* main.c: VSYS/USB via cyw43-locked ADC -> g_batt_v/pct/on_usb */
         clock_serial_poll();            /* USB "TIME ..." push from the flash tooling (may stall on stdio lock) */
+        clock_checkpoint();             /* clock survives brown-out / watchdog / crash reboots */
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

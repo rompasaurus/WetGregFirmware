@@ -18,7 +18,7 @@
 const char *const mood_names[MOOD_COUNT] = {
     "NORMAL", "WEIRD", "UNHINGED", "ANGRY",
     "SAD", "CHAOTIC", "HUNGRY", "TIRED",
-    "SLAP HAPPY", "LAZY", "FAT", "CHILL",
+    "SLAP HAPPY", "LAZY", "FULL", "CHILL",
     "CREEPY", "EXCITED", "NOSTALGIC", "HOMESICK",
     "WISE",
 };
@@ -499,9 +499,9 @@ static void draw_mouth_lazy(void) {
     }
 }
 
-/* ─── Fat: content wide pupils, smile with cheek puffs ─── */
+/* ─── Full: content wide pupils, smile with cheek puffs ─── */
 
-static void draw_pupils_fat(void) {
+static void draw_pupils_full(void) {
     /* Wider pupils — happy and satisfied */
     for (int e = 0; e < 2; e++) {
         int ecx = e ? 49 : 23;
@@ -512,7 +512,7 @@ static void draw_pupils_fat(void) {
     }
 }
 
-static void draw_mouth_fat(void) {
+static void draw_mouth_full(void) {
     /* Wide satisfied smile + cheek puffs */
     for (int x = 24; x < 47; x++) {
         int cy = 38 + ((x-35)*(x-35)) / 18;
@@ -767,7 +767,7 @@ static void setup_body_transform(uint8_t mood, uint32_t f) {
         case MOOD_LAZY:
             body_dy = 3; body_x_expand = 3;
             break;
-        case MOOD_FAT:
+        case MOOD_FULL:
             body_x_expand = 3; body_dy = (int)sinf(f * 1.8f);
             break;
         case MOOD_CHILL:
@@ -821,7 +821,7 @@ void draw_octopus(const Quote *q, int expr, uint32_t frame_idx) {
         case MOOD_HUNGRY:   draw_pupils_hungry();   break;
         case MOOD_TIRED:    draw_pupils_tired();    break;
         case MOOD_LAZY:     draw_pupils_lazy();     break;
-        case MOOD_FAT:      draw_pupils_fat();      break;
+        case MOOD_FULL:      draw_pupils_full();      break;
         case MOOD_CHILL:    draw_pupils_chill();    break;
         case MOOD_CREEPY:    draw_pupils_creepy();    break;
         case MOOD_EXCITED:  draw_pupils_excited();  break;
@@ -853,7 +853,7 @@ void draw_octopus(const Quote *q, int expr, uint32_t frame_idx) {
         case EXPR_TIRED:     draw_mouth_tired();     break;
         case EXPR_SLAPHAPPY: draw_mouth_slaphappy(); break;
         case EXPR_LAZY:      draw_mouth_lazy();      break;
-        case EXPR_FAT:       draw_mouth_fat();       break;
+        case EXPR_FULL:       draw_mouth_full();       break;
         case EXPR_CHILL:     draw_mouth_chill();     break;
         case EXPR_CREEPY:     draw_mouth_creepy();     break;
         case EXPR_EXCITED:   draw_mouth_excited();   break;
@@ -942,7 +942,7 @@ static const uint8_t cycle_hungry[]    = {EXPR_HUNGRY, EXPR_OPEN, EXPR_HUNGRY, E
 static const uint8_t cycle_tired[]     = {EXPR_TIRED, EXPR_OPEN, EXPR_TIRED, EXPR_TIRED};
 static const uint8_t cycle_slaphappy[] = {EXPR_SLAPHAPPY, EXPR_OPEN, EXPR_SLAPHAPPY, EXPR_SMILE};
 static const uint8_t cycle_lazy[]      = {EXPR_LAZY, EXPR_LAZY, EXPR_LAZY, EXPR_OPEN};
-static const uint8_t cycle_fat[]       = {EXPR_FAT, EXPR_OPEN, EXPR_FAT, EXPR_SMILE};
+static const uint8_t cycle_full[]       = {EXPR_FULL, EXPR_OPEN, EXPR_FULL, EXPR_SMILE};
 static const uint8_t cycle_chill[]     = {EXPR_CHILL, EXPR_OPEN, EXPR_CHILL, EXPR_SMILE};
 static const uint8_t cycle_creepy[]     = {EXPR_CREEPY, EXPR_OPEN, EXPR_CREEPY, EXPR_SMILE};
 static const uint8_t cycle_excited[]   = {EXPR_EXCITED, EXPR_OPEN, EXPR_EXCITED, EXPR_SMILE};
@@ -961,7 +961,7 @@ const uint8_t *mood_cycle(uint8_t mood) {
         case MOOD_TIRED:     return cycle_tired;
         case MOOD_SLAPHAPPY: return cycle_slaphappy;
         case MOOD_LAZY:      return cycle_lazy;
-        case MOOD_FAT:       return cycle_fat;
+        case MOOD_FULL:       return cycle_full;
         case MOOD_CHILL:     return cycle_chill;
         case MOOD_CREEPY:     return cycle_creepy;
         case MOOD_EXCITED:   return cycle_excited;

@@ -36,10 +36,19 @@ Flash it:
   (`dev-setup/flash.sh --sync` pushes the time without flashing). The DevTool flash
   buttons do the same push automatically for WetGreg firmware.
 
-**Clock after power-off.** There is no battery-backed RTC, so after a power-off the clock
-falls back to the firmware's build time (local time — the Docker build mounts the host
+**Clock after power-off.** There is no battery-backed RTC, so after a true power-off the
+clock falls back to the firmware's build time (local time — the Docker build mounts the host
 `/etc/localtime`) until a USB time push, Wi-Fi NTP, or Settings → SET TIME. The serial
 command is `TIME YYYY-MM-DD HH:MM:SS` (local time); the board replies `TIME OK ...`.
+
+**Clock across reboots.** The microsecond timer the clock rides on restarts at zero on
+*every* reset — brown-out on a sagging cell, watchdog, crash, picotool reflash — so the
+housekeeping task checkpoints the time into RAM that the C runtime never clears
+(`.uninitialized_data`, kept by both the USB and the picowota linker scripts). At boot a
+valid checkpoint wins over the build time, and the boot banner says which was used plus
+the reset reason from powman `CHIP_RESET`. `dev-setup/flash.sh --query` (serial `TIME?`)
+prints the device's clock, uptime, warm-boot count and last reset reason next to the
+computer's time — use it when a Greg's clock looks wrong.
 
 **Incremental builds:** after the first `cmake`, you only re-run `ninja`. Re-run `cmake`
 only when you add files or change build options. To start clean: `rm -rf build`.

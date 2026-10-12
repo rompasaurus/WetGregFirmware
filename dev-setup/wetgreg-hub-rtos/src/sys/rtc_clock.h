@@ -18,8 +18,18 @@ void init_rtc_from_compile_time(void);
 
 /* Non-blocking: consume any USB-serial input and apply a complete
  *   TIME YYYY-MM-DD HH:MM:SS
- * line (local time). Replies "TIME OK ..." or "TIME ERR". Call periodically
- * from a task that may stall briefly on the stdio lock. */
+ * line (local time). Replies "TIME OK ..." or "TIME ERR". "TIME?" answers
+ * with the current clock, uptime, warm-boot count and last reset reason.
+ * Call periodically from a task that may stall briefly on the stdio lock. */
 void clock_serial_poll(void);
+
+/* Save the current time into reset-surviving RAM so a brown-out / watchdog /
+ * crash reboot resumes the clock instead of snapping back to the build time.
+ * Cheap (a few stores); call it every housekeeping tick. */
+#if PICO_RP2040
+static inline void clock_checkpoint(void) { }   /* hardware RTC keeps itself */
+#else
+void clock_checkpoint(void);
+#endif
 
 #endif /* RTC_CLOCK_H */

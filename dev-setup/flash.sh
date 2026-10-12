@@ -5,20 +5,24 @@
 #   ./flash.sh                 flash build/wetgreg_hub_rtos.uf2, then sync time
 #   ./flash.sh path/to/fw.uf2  flash a specific .uf2, then sync time
 #   ./flash.sh --sync          only push the time (device already running)
+#   ./flash.sh --query         ask the device for its clock, uptime and last
+#                              reset reason (no change made)
 #   WETGREG_PORT=/dev/ttyACM1 ./flash.sh --sync   pick the serial port yourself
 #
 # The firmware listens on USB serial for "TIME YYYY-MM-DD HH:MM:SS" and replies
 # "TIME OK ...". Until it hears that (or gets NTP / a manual set), clock
-# readouts fall back to the build time.
+# readouts fall back to the build time. "TIME?" is answered with "TIME NOW ...".
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UF2="$HERE/wetgreg-hub-rtos/build/wetgreg_hub_rtos.uf2"
 SYNC_ONLY=0
+QUERY_ONLY=0
 
 case "${1:-}" in
     --sync) SYNC_ONLY=1 ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    --query) QUERY_ONLY=1 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     "") ;;
     *) UF2="$1" ;;
 esac
@@ -62,6 +66,33 @@ sync_time() {
     echo "Device did not confirm the time (firmware too old?)" >&2
     return 1
 }
+
+query_time() {
+    local port="" i attempt line
+    port="$(find_port)" || { echo "No WetGreg serial port found (is it plugged in and running?)" >&2; return 1; }
+    stty -F "$port" 115200 raw -echo
+    exec 3<>"$port"
+    for attempt in 1 2 3; do
+        printf 'TIME?\n' >&3
+        while IFS= read -r -t 2 line <&3; do
+            line="${line%$'\r'}"
+            if [[ "$line" == "TIME NOW"* ]]; then
+                echo "$port: ${line#TIME NOW }"
+                echo "This computer: $(date '+%Y-%m-%d %H:%M:%S')"
+                exec 3<&-
+                return 0
+            fi
+        done
+    done
+    exec 3<&-
+    echo "Device did not answer TIME? (firmware too old?)" >&2
+    return 1
+}
+
+if (( QUERY_ONLY )); then
+    query_time
+    exit $?
+fi
 
 if (( ! SYNC_ONLY )); then
     [[ -f "$UF2" ]] || { echo "Firmware not found: $UF2 (build it first)" >&2; exit 1; }

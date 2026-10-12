@@ -30,7 +30,7 @@
 #define MOOD_TIRED     7
 #define MOOD_SLAPHAPPY 8
 #define MOOD_LAZY      9
-#define MOOD_FAT       10
+#define MOOD_FULL       10
 #define MOOD_CHILL     11
 #define MOOD_CREEPY    12
 #define MOOD_EXCITED   13
@@ -52,7 +52,7 @@
 #define EXPR_TIRED     9
 #define EXPR_SLAPHAPPY 10
 #define EXPR_LAZY      11
-#define EXPR_FAT       12
+#define EXPR_FULL       12
 #define EXPR_CHILL     13
 #define EXPR_CREEPY    14
 #define EXPR_EXCITED   15

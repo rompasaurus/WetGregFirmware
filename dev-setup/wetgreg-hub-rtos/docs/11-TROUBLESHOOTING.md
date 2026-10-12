@@ -51,6 +51,7 @@ REFRESH-TIME METER                 BATTERY / CHARGE METER
 | "Full" (STDBY) LED dim-blinking on USB | n/a (visual) | TP4056 **oscillating** — starvation or **latched/dead cell** | Charge with load removed → solid = starvation; still blinking = bad cell. |
 | Won't boot, flashes fine, but `refresh ~700 ms` | display OK, app still wrong | **corrupted flash** (brownout during a write) | DevTool **Full Erase** → reflash. |
 | Cell hot / puffy, LED never greens | n/a (visual) | over-discharged / damaged cell | ⚠️ Replace the cell; don't recharge a damaged LiPo. |
+| Clock wrong after a night on battery (each Greg differs) | `flash.sh --query`: short `UP`, `RESET BROWN-OUT`/`WATCHDOG`, `BOOTS` > 0 | device **reset** overnight (brown-out under a radio burst, crash); old firmware then restarted from the build time | Firmware ≥ this rev resumes the clock across resets. Fix the reset itself: see `RESET` reason; brown-out → power path / cell. If `UP` is long and the time is right but the display is stale, it's a UI/display freeze, not the clock. |
 
 ---
 
