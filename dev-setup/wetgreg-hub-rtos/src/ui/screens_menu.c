@@ -19,6 +19,7 @@
 #include "rtc_clock.h"
 #include "rtos_tasks.h"   /* display_render (mid-scan frame in render_i2c_scan) */
 #include "speaker.h"
+#include "storage.h"      /* lang_is_ar (settings → LANGUAGE row) */
 #include "text.h"
 #include "version.h"
 #include "wifi.h"
@@ -45,15 +46,17 @@ void render_menu(int selected) {
     for (int x = 5; x < 245; x++) px_set(x, 73);
     draw_text(8, 75, "MENU", IMG_W);
 
-    /* 6 items — scroll if needed */
-    int m_vis = 5;
+    /* Scrolling window: 5 rows on the 8 px Latin pitch; the Arabic font needs
+     * 12 px per row, so it shows 3. */
+    int m_vis = lang_is_ar() ? 3 : 5, m_pitch = lang_is_ar() ? 12 : 8;
+    int m_y0  = lang_is_ar() ? 87 : 84;
     int m_start = 0;
     if (selected > m_vis - 2) m_start = selected - (m_vis - 2);
     if (m_start + m_vis > MENU_COUNT) m_start = MENU_COUNT - m_vis;
     if (m_start < 0) m_start = 0;
     for (int i = 0; i < m_vis && (m_start + i) < MENU_COUNT; i++) {
         int idx = m_start + i;
-        int y = 84 + i * 8;
+        int y = m_y0 + i * m_pitch;
         char line[40];
         if (idx == selected) {
             snprintf(line, sizeof(line), "> %s", menu_items[idx]);
@@ -175,7 +178,7 @@ void render_mood_select(int selected) {
 
 /* ─── Settings submenu (connectivity + display + time + factory reset) ─── */
 static const char *set_items[SET_MENU_COUNT] = {
-    "NETWORK", "BLUETOOTH", "DISPLAY", "SET TIME", "RESET WETGREG", "BACK",
+    "NETWORK", "BLUETOOTH", "DISPLAY", "SET TIME", "LANGUAGE", "RESET WETGREG", "BACK",
 };
 
 void render_settings_menu(int sel) {
@@ -185,13 +188,21 @@ void render_settings_menu(int sel) {
     draw_text(tall ? 8 : 34, tall ? 10 : 3, "SETTINGS", canvas_w);
     for (int x = 4; x < canvas_w - 4; x++) px_set(x, tall ? 22 : 14);
 
-    int y = tall ? 34 : 22, dy = tall ? 22 : 14;
+    /* The language row shows its current value; the menu stays in English so
+     * it is navigable whatever Greg is set to. */
+    char it_lang[28];
+    snprintf(it_lang, sizeof(it_lang), "LANGUAGE: %s", lang_is_ar() ? "ARABIC" : "ENGLISH");
+
+    /* Wide: 7 rows on a 12 px pitch keep the footer hint clear at y=108. */
+    int y = tall ? 34 : 20, dy = tall ? 22 : 12;
     for (int i = 0; i < SET_MENU_COUNT; i++) {
         int yy = y + i * dy; char l[36];
-        if (i == sel) { snprintf(l, sizeof(l), "> %s", set_items[i]); draw_inverted_line(yy, l); }
-        else          { snprintf(l, sizeof(l), "  %s", set_items[i]); draw_text(8, yy, l, canvas_w); }
+        const char *it = (i == SET_ITEM_LANGUAGE) ? it_lang : set_items[i];
+        if (i == sel) { snprintf(l, sizeof(l), "> %s", it); draw_inverted_line(yy, l); }
+        else          { snprintf(l, sizeof(l), "  %s", it); draw_text(8, yy, l, canvas_w); }
     }
-    draw_text(8, tall ? 232 : 108, "C:SELECT  L:BACK", canvas_w);
+    draw_text(8, tall ? 232 : 108,
+              sel == SET_ITEM_LANGUAGE ? "C:TOGGLE  L:BACK" : "C:SELECT  L:BACK", canvas_w);
 }
 
 /* ─── Display settings (auto-rotate + orientation) ─── */
@@ -310,17 +321,18 @@ void render_info_screen(void) {
         static char L[10][40]; static const char *lp[10]; int n = 0;
         datetime_t t; rtc_get_datetime(&t);
         int h = t.hour % 12; if (h == 0) h = 12;
-        snprintf(L[n], 40, "FW V%s", WETGREG_VERSION); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "DISP %s", DISPLAY_NAME); lp[n] = L[n]; n++;
+        /* "KEY: VALUE" rows so the Arabic layer can translate the labels. */
+        snprintf(L[n], 40, "FW: V%s", WETGREG_VERSION); lp[n] = L[n]; n++;
+        snprintf(L[n], 40, "DISP: %s", DISPLAY_NAME); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "%s %d %d:%02d%s", month_names[t.month - 1], t.day,
                  h, t.min, t.hour < 12 ? "A" : "P"); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "MOOD %s", current_mood < 0 ? "ALL" : mood_names[current_mood]); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "WIFI %s", wifi_connected ? wifi_ip_str : "OFF"); lp[n] = L[n]; n++;
-        if (pct < 0) snprintf(L[n], 40, "USB %.2fV", (double)vsys);
-        else         snprintf(L[n], 40, "BATT %d%% %.2fV", pct, (double)vsys);
+        snprintf(L[n], 40, "MOOD: %s", current_mood < 0 ? "ALL" : mood_names[current_mood]); lp[n] = L[n]; n++;
+        snprintf(L[n], 40, "WIFI: %s", wifi_connected ? wifi_ip_str : "OFF"); lp[n] = L[n]; n++;
+        if (pct < 0) snprintf(L[n], 40, "USB: %.2fV", (double)vsys);
+        else         snprintf(L[n], 40, "BATT: %d%% %.2fV", pct, (double)vsys);
         lp[n] = L[n]; n++;
-        if (pct >= 0) { snprintf(L[n], 40, "LEFT %s", left); lp[n] = L[n]; n++; }
-        snprintf(L[n], 40, "RAW %.2fV +%umV %c", (double)g_batt_raw_v,
+        if (pct >= 0) { snprintf(L[n], 40, "LEFT: %s", left); lp[n] = L[n]; n++; }
+        snprintf(L[n], 40, "RAW: %.2fV +%umV %c", (double)g_batt_raw_v,
                  (unsigned)g_batt_offset_mv, g_batt_offset_src); lp[n] = L[n]; n++;
         snprintf(L[n], 40, "UP:CAL FULL DN:RST"); lp[n] = L[n]; n++;
         render_text_tall("DEVICE INFO", lp, n);
@@ -345,8 +357,10 @@ void render_info_screen(void) {
              t.hour < 12 ? "AM" : "PM");
     draw_text(10, y, buf, IMG_W); y += 11;
 
-    snprintf(buf, sizeof(buf), "MOOD: %s  QUOTES: %d",
-             current_mood < 0 ? "ALL" : mood_names[current_mood], QUOTE_COUNT);
+    snprintf(buf, sizeof(buf), "MOOD: %s", current_mood < 0 ? "ALL" : mood_names[current_mood]);
+    draw_text(10, y, buf, IMG_W); y += 11;
+
+    snprintf(buf, sizeof(buf), "QUOTES: %d", QUOTE_COUNT);
     draw_text(10, y, buf, IMG_W); y += 11;
 
     snprintf(buf, sizeof(buf), "WIFI: %s", wifi_connected ? wifi_ip_str : "OFF");
@@ -382,12 +396,13 @@ void render_set_time(void) {
     draw_text(tall ? 8 : 30, tall ? 10 : 3, "SET DATE / TIME", canvas_w);
     for (int x = 4; x < canvas_w - 4; x++) px_set(x, tall ? 22 : 14);
 
-    char f[5][14];
-    snprintf(f[0], 14, "YEAR  %d", settime_dt.year);
-    snprintf(f[1], 14, "MONTH %02d", settime_dt.month);
-    snprintf(f[2], 14, "DAY   %02d", settime_dt.day);
-    snprintf(f[3], 14, "HOUR  %02d", settime_dt.hour);
-    snprintf(f[4], 14, "MIN   %02d", settime_dt.min);
+    /* "KEY: VALUE" so the Arabic layer can translate the label on its own. */
+    char f[5][24];
+    snprintf(f[0], 24, "YEAR: %d", settime_dt.year);
+    snprintf(f[1], 24, "MONTH: %02d", settime_dt.month);
+    snprintf(f[2], 24, "DAY: %02d", settime_dt.day);
+    snprintf(f[3], 24, "HOUR: %02d", settime_dt.hour);
+    snprintf(f[4], 24, "MIN: %02d", settime_dt.min);
 
     int y0 = tall ? 44 : 26, dy = tall ? 22 : 13;
     for (int i = 0; i < 5; i++) {
@@ -396,7 +411,7 @@ void render_set_time(void) {
         /* Selected field is a steady highlight either way. EDIT mode adds a second
          * '>' arrow so it's clear U/D now adjusts the value (vs. just picking it). */
         const char *prefix = selected ? (settime_editing ? ">>" : "> ") : "  ";
-        char line[20];
+        char line[32];
         snprintf(line, sizeof(line), "%s%s", prefix, f[i]);
         if (selected) draw_inverted_line(y, line);
         else          draw_text(8, y, line, canvas_w);

@@ -10,10 +10,21 @@
 #include <string.h>
 
 #include "canvas.h"
+#include "i18n.h"        /* Arabic intro story beats */
 #include "motion.h"
 #include "octopus.h"
 #include "rng.h"
+#include "storage.h"     /* lang_is_ar */
 #include "text.h"
+#include "text_ar.h"
+
+/* Big-font Arabic title centred in [x0, x0+w) with the same baseline as a
+ * 2x Latin line drawn at y (Latin 2x baseline = y + 13). */
+static void ar_title_centered(int x0, int w, int y, const char *s) {
+    int tw = text_ar_width_f(AR_FONT_BIG, s);
+    int x_right = x0 + (w + tw) / 2;
+    draw_text_ar_f(AR_FONT_BIG, x_right, y + 13 - ar_font_baseline(AR_FONT_BIG), s, w, 1, 0);
+}
 
 /* ─── Boot splash (STATE_SPLASH) ─────────────────────────────────────────────
  * One-shot power-on animation (Requirements/Feature_SplashBootAnimation):
@@ -97,8 +108,13 @@ void render_splash(uint32_t elapsed, uint32_t frame_idx) {
         /* Title drops in from the top, escorted by a bubble. */
         if (elapsed >= SPLASH_ENTER_MS) {
             int wy = -40 + (int)(70.0f * ti);    /* "WET" settles at y=30 */
-            draw_text_2x((122 - 46) / 2, wy, "WET");
-            draw_text_2x((122 - 62) / 2, wy + 18, "GREG");
+            if (lang_is_ar()) {
+                ar_title_centered(0, 122, wy, "ويت");
+                ar_title_centered(0, 122, wy + 20, "جريج");
+            } else {
+                draw_text_2x((122 - 46) / 2, wy, "WET");
+                draw_text_2x((122 - 62) / 2, wy + 18, "GREG");
+            }
             draw_splash_bubble(104, wy + 8, 4);
         }
     } else {
@@ -113,8 +129,18 @@ void render_splash(uint32_t elapsed, uint32_t frame_idx) {
         layout_ox = 0; layout_oy = 0;
 
         /* Title slides in from the right once Greg is in position. */
-        if (elapsed >= SPLASH_ENTER_MS)
-            draw_text_2x(250 - (int)((250 - 98) * ti), 40, "WET GREG");
+        if (elapsed >= SPLASH_ENTER_MS) {
+            if (lang_is_ar()) {
+                /* Same motion as the Latin title: right edge from off-screen
+                 * (250 + width) to the Latin title's final right edge (226). */
+                int tw = text_ar_width_f(AR_FONT_BIG, "ويت جريج");
+                int xr = (250 + tw) - (int)((250 + tw - 226) * ti);
+                draw_text_ar_f(AR_FONT_BIG, xr, 40 + 13 - ar_font_baseline(AR_FONT_BIG),
+                               "ويت جريج", 250, 1, 0);
+            } else {
+                draw_text_2x(250 - (int)((250 - 98) * ti), 40, "WET GREG");
+            }
+        }
     }
 }
 
@@ -160,8 +186,16 @@ static void intro_draw_story(uint32_t elapsed, int tx, int ty, int tw) {
     if (li >= INTRO_NLINES) li = INTRO_NLINES - 1;
     uint32_t t0 = INTRO_TEXT_T0 + li * INTRO_LINE_MS;
 
-    char buf[40];
     size_t n = (elapsed - t0) / INTRO_CHAR_MS;
+    if (lang_is_ar()) {
+        /* Same typewriter beat, revealed per letter (code point), big Kufi,
+         * right-aligned in the story column. */
+        char abuf[96];
+        ar_utf8_prefix(i18n_intro_line((int)li), (int)n, abuf, sizeof(abuf));
+        draw_text_ar_f(AR_FONT_BIG, tx + tw, ty, abuf, tw, 4, 0);
+        return;
+    }
+    char buf[40];
     size_t len = strlen(intro_lines[li]);
     if (n > len) n = len;
     memcpy(buf, intro_lines[li], n);

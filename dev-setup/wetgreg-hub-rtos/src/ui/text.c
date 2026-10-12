@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "canvas.h"
+#include "text_ar.h"     /* ar_ui_* hooks: Arabic mode takes over every draw call */
 
 /* ─── 5×7 bitmap font ─── */
 /* Index: A=0..Z=25, 0=26..9=35, ' '=36, .=37, ,=38, !=39, ?=40,
@@ -97,6 +98,7 @@ void draw_char_c(int x0, int y0, char c) {
 }
 
 void draw_text(int x0, int y0, const char *text, int max_w) {
+    if (ar_ui_text(x0, y0, text, max_w)) return;    /* Arabic mode: translated + mirrored */
     int cx = x0, cy = y0;
     int char_w = 6; /* 5px + 1px gap */
 
@@ -156,6 +158,7 @@ void draw_text_2x(int x0, int y0, const char *text) {
  * 2x2 glyph scaling, on a tighter 12 px advance so real words fit the 122 px
  * canvas. Used by the intro story. */
 void draw_text_big(int x0, int y0, const char *text, int max_w) {
+    if (ar_ui_big(x0, y0, text, max_w)) return;
     int cx = x0, cy = y0;
     const int char_w = 12;              /* 10 px glyph + 2 px gap */
 
@@ -193,12 +196,14 @@ void draw_text_big(int x0, int y0, const char *text, int max_w) {
 
 /* Pseudo-bold small text: double-struck 1 px apart (no wrap). */
 void draw_text_bold(int x0, int y0, const char *text) {
+    if (ar_ui_bold(x0, y0, text)) return;
     draw_text(x0,     y0, text, 1000);
     draw_text(x0 + 1, y0, text, 1000);
 }
 
 /* ─── Helper: draw inverted text (white on black bar) ─── */
 void draw_inverted_line(int y, const char *text) {
+    if (ar_ui_inverted(y, text)) return;
     int hx_end = canvas_w - 6;          /* canvas-aware: 244 wide, 116 tall */
     for (int hy = y - 1; hy < y + 8; hy++)
         for (int hx = 6; hx < hx_end; hx++)

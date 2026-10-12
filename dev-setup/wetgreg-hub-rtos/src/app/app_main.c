@@ -35,6 +35,7 @@
 #include "DEV_Config.h"
 #include "bt.h"
 #include "quotes.h"            /* the ONE translation unit that references quotes[] */
+#include "quotes_ar.h"         /* Egyptian-Arabic twin table: quotes_ar[i] ↔ quotes[i] */
 #include "rtc_compat.h"
 #include "version.h"
 
@@ -112,6 +113,12 @@ static bool bt_enabled = false;
 /* Critical-battery hold: Greg wakes on CENTER so the "CHARGE ME" still can be
  * read, then goes back to sleep after this long if the cell is still flat. */
 #define BATT_CRIT_AWAKE_MS  15000u
+
+/* The quote to show for index i in the current language. Both tables share
+ * the index and the mood, so mood filtering only ever looks at quotes[]. */
+static inline const Quote *quote_at(int i) {
+    return lang_is_ar() ? &quotes_ar[i] : &quotes[i];
+}
 
 /* ─── Pick a quote matching current_mood, or random if -1 ─── */
 static int pick_quote(void) {
@@ -346,7 +353,7 @@ static void app_task(void *param) {
 
         /* ════════ OCTOPUS MAIN SCREEN ════════ */
         case STATE_OCTOPUS: {
-            const Quote *q = &quotes[qi];
+            const Quote *q = quote_at(qi);
             const uint8_t *cycle = mood_cycle(q->mood);
             uint8_t expr = cycle[frame_idx % 4];
 
@@ -359,9 +366,9 @@ static void app_task(void *param) {
                 if (orientation_is_tall()) {
                     /* Longways layout draws its own 2-row status bar (wifi + batt,
                      * date + time), quote, and octopus at the bottom. */
-                    render_octopus_tall(&quotes[qi], expr, frame_idx);
+                    render_octopus_tall(quote_at(qi), expr, frame_idx);
                 } else {
-                    render_frame(&quotes[qi], expr, frame_idx);
+                    render_frame(quote_at(qi), expr, frame_idx);
                     draw_wifi_icon(0, 1, wifi_connected);   /* top-left */
                     {
                         int soc_x = 18;
@@ -371,7 +378,7 @@ static void app_task(void *param) {
                     draw_battery_icon(234, 1);               /* top-right */
                     {
                         char sbuf[20];
-                        snprintf(sbuf, sizeof(sbuf), "STEPS %lu",
+                        snprintf(sbuf, sizeof(sbuf), "STEPS: %lu",
                                  (unsigned long)steps_today);
                         draw_text(5, 113, sbuf, IMG_W);      /* left of the screen */
                     }
@@ -543,7 +550,7 @@ static void app_task(void *param) {
                     if (orientation_is_tall()) {
                         render_menu_tall(menu_sel);
                     } else {
-                        const Quote *q = &quotes[qi];
+                        const Quote *q = quote_at(qi);
                         render_frame(q, mood_cycle(q->mood)[frame_idx % 4], frame_idx);
                         render_menu(menu_sel);
                     }
@@ -691,6 +698,13 @@ static void app_task(void *param) {
                             rtc_get_datetime(&settime_dt); settime_field = 0;
                             settime_editing = false;
                             state = STATE_SET_TIME; break;
+                        case SET_ITEM_LANGUAGE:
+                            /* Cycle ENGLISH → ARABIC → ENGLISH; persisted, so it
+                             * survives reboots. The next home frame picks up the
+                             * matching quote table and labels automatically. */
+                            language_store((uint8_t)((g_saved.language + 1) % LANG_COUNT));
+                            speaker_tone(1200, 50);
+                            break;                       /* stay on the menu, redraw */
                         case SET_ITEM_RESET:     state = STATE_RESET_CONFIRM; break;
                         default:                 state = STATE_MENU; break;
                     }

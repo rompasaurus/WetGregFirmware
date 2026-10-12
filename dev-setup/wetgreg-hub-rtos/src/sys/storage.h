@@ -50,10 +50,16 @@ typedef struct {
     uint8_t      batt_offset_src;      /* 'D' default / 'A' auto-anchor / 'M' manual */
     uint8_t      wifi_mode;            /* WIFI_MODE_SYNC_ONLY (default) / WIFI_MODE_ALWAYS */
     char         last_ssid[33];        /* last network joined — the daily time-sync target */
+    /* ── Language (appended; 0xFF on old images → sanitised to English). ── */
+    uint8_t      language;             /* LANG_EN (default) / LANG_AR (Egyptian Arabic) */
 } saved_store_t;
 
 #define WIFI_MODE_SYNC_ONLY 0          /* join → NTP → drop (and once a day in the background) */
 #define WIFI_MODE_ALWAYS    1          /* stay associated (PM1 power-save) until told otherwise */
+
+#define LANG_EN 0                      /* English (default) */
+#define LANG_AR 1                      /* Egyptian Arabic: quotes, moods, home-screen labels */
+#define LANG_COUNT 2
 
 /* The in-RAM copy of the store. Mutate ONLY through the functions below (they
  * persist), except g_saved.auto_rotate/manual_orient which the Display-settings
@@ -78,6 +84,10 @@ bool        met_should_greet(uint16_t id);
 void        battery_offset_store(uint16_t mv);   /* called by battery.c; stores g_batt_offset_src too */
 void        wifi_mode_store(uint8_t mode);
 void        wifi_last_ssid_store(const char *ssid); /* no-op (no flash wear) when unchanged */
+
+/* Language (persist). lang_is_ar() is the one check every renderer uses. */
+void        language_store(uint8_t lang);
+static inline int lang_is_ar(void) { return g_saved.language == LANG_AR; }
 
 /* Identity */
 void        wetgreg_set_name(const char *name);

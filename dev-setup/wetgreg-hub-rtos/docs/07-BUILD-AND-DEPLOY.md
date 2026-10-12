@@ -50,6 +50,12 @@ the reset reason from powman `CHIP_RESET`. `dev-setup/flash.sh --query` (serial 
 prints the device's clock, uptime, warm-boot count and last reset reason next to the
 computer's time — use it when a Greg's clock looks wrong.
 
+**Arabic font tables.** `src/ui/font_ar.h` (three sizes: UI 10 px, quotes 11 px, titles
+16 px) is generated from the host's Noto Kufi Arabic font by `dev-setup/tools/arfont.py`
+(`header <out.h> <ttf> font_ar_ui:10 font_ar_q:11 font_ar_big:16`; `preview` renders
+sample lines to a PNG first). Re-run it only if you change the face or pixel sizes; the
+committed header builds standalone. UI strings live in `src/ui/i18n.c`.
+
 **Incremental builds:** after the first `cmake`, you only re-run `ninja`. Re-run `cmake`
 only when you add files or change build options. To start clean: `rm -rf build`.
 

@@ -62,6 +62,7 @@
 
 /* Mood names for the selector / tags. */
 extern const char *const mood_names[MOOD_COUNT];
+extern const char *const mood_names_ar[MOOD_COUNT];   /* Egyptian Arabic, UTF-8 */
 
 /* Current mood filter: -1 = all moods (random quote pick). */
 extern int current_mood;

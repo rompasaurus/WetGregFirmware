@@ -29,6 +29,7 @@ definition-of-done section, and a suggested git branch name.
 | [Pedometer Calibration](complete/Feature_PedometerCalibration_Status-Complete.md) | On-body measurement (2026-07-09) | ✅ Complete | `fix/pedometer-calibration` |
 | [Fast Auto-Rotate](complete/Feature_FastAutoRotate_Status-Complete.md) | Field report (2026-07-10) | ✅ Complete | `fix/auto-rotate-latency` |
 | [Battery Gauge + Power Budget](incomplete/Feature_BatteryGaugeAndPowerBudget_Status-Incomplete.md) | Field report (2026-10-10) | ❌ Incomplete | `feature/battery-gauge-power-budget` |
+| [Egyptian Arabic Localization](complete/Feature_EgyptianArabicLocalization_Status-Complete.md) | Owner request (2026-10-12) | ✅ Complete (HW check pending) | `feature/egyptian-arabic` |
 
 Sources: handwritten notes summarized in [`../Notes/notes-summary.md`](../Notes/notes-summary.md)
 and open GitHub issues at https://github.com/rompasaurus/WetGregFirmware/issues.

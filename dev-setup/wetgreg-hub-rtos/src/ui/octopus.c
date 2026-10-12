@@ -23,6 +23,15 @@ const char *const mood_names[MOOD_COUNT] = {
     "WISE",
 };
 
+/* Egyptian-Arabic mood names (UTF-8), same order. Drawn by text_ar.c. */
+const char *const mood_names_ar[MOOD_COUNT] = {
+    "عادي", "غريب", "مجنون", "متنرفز",
+    "حزين", "فوضوي", "جعان", "تعبان",
+    "هايص", "كسلان", "شبعان", "رايق",
+    "مرعب", "متحمس", "حنين", "واحشني البيت",
+    "حكيم",
+};
+
 int current_mood = -1;  /* -1 = all moods (random) */
 
 /* Layout origin — repositions the whole octopus (e.g. tall layout, splash). */

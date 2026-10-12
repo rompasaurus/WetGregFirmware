@@ -25,6 +25,13 @@
  * survives the sync-only link drop (ntp_synced is cleared on disconnect). */
 static void sync_age_text(char *buf, size_t n) {
     uint32_t age = wifi_last_sync_age_s();
+    if (lang_is_ar()) {      /* dynamic text: built in Arabic directly */
+        if (age == UINT32_MAX)      snprintf(buf, n, "عمره ما اتزامن");
+        else if (age < 120)         snprintf(buf, n, "اتزامن دلوقتي");
+        else if (age < 2 * 3600)    snprintf(buf, n, "اتزامن من %lu دقيقة", (unsigned long)(age / 60));
+        else                        snprintf(buf, n, "اتزامن من %lu ساعة", (unsigned long)(age / 3600));
+        return;
+    }
     if (age == UINT32_MAX)      snprintf(buf, n, "NEVER SYNCED");
     else if (age < 120)         snprintf(buf, n, "SYNCED JUST NOW");
     else if (age < 2 * 3600)    snprintf(buf, n, "SYNCED %luM AGO", (unsigned long)(age / 60));
@@ -32,27 +39,29 @@ static void sync_age_text(char *buf, size_t n) {
 }
 
 void render_network_screen(void) {
-    char age[24]; sync_age_text(age, sizeof(age));
+    char age[48]; sync_age_text(age, sizeof(age));
     const char *mode = g_saved.wifi_mode == WIFI_MODE_ALWAYS ? "ALWAYS ON" : "SYNC ONLY";
     if (orientation_is_tall()) {
-        static char L[8][40]; static const char *lp[8]; int n = 0;
-        snprintf(L[n], 40, "WIFI: %s", wifi_enabled ? "ON" : "OFF"); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "MODE: %s", mode); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "SSID: %s", wifi_ssid_display); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "STATE: %s", !wifi_enabled ? "OFF" :
+        static char L[8][64]; static const char *lp[8]; int n = 0;
+        snprintf(L[n], 64, "WIFI: %s", wifi_enabled ? "ON" : "OFF"); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "MODE: %s", mode); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "SSID: %s", wifi_ssid_display); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "STATE: %s", !wifi_enabled ? "OFF" :
                  wifi_connected ? "CONNECTED" : "DISCONN"); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "IP: %s", wifi_connected ? wifi_ip_str : "---"); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "SIGNAL: %d dBm", wifi_connected ? (int)wifi_rssi : 0); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "NTP: %s", ntp_synced ? "SYNCED" : "NOT SYNCED"); lp[n] = L[n]; n++;
-        snprintf(L[n], 40, "TIME: %s", age); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "IP: %s", wifi_connected ? wifi_ip_str : "---"); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "SIGNAL: %d dBm", wifi_connected ? (int)wifi_rssi : 0); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "NTP: %s", ntp_synced ? "SYNCED" : "NOT SYNCED"); lp[n] = L[n]; n++;
+        snprintf(L[n], 64, "TIME: %s", age); lp[n] = L[n]; n++;
         render_text_tall("WIFI STATUS", lp, n);
         return;
     }
     memset(frame, 0, sizeof(frame));
     draw_text(30, 3, "WIFI STATUS", IMG_W);
     for (int x = 10; x < 240; x++) px_set(x, 14);
-    char buf[48];
+    char buf[64];
 
+    /* 7 rows on a 13 px pitch (22..100); every row is "KEY: VALUE" so the
+     * Arabic layer can translate the label and keep the data as is. */
     snprintf(buf, sizeof(buf), "WIFI: %s", wifi_enabled ? "ON" : "OFF");
     draw_text(10, 22, buf, IMG_W);
 
@@ -64,15 +73,16 @@ void render_network_screen(void) {
              wifi_connected ? "CONNECTED" : "DISCONNECTED");
     draw_text(10, 48, buf, IMG_W);
 
-    snprintf(buf, sizeof(buf), "IP: %s", wifi_connected ? wifi_ip_str : "---");
+    if (wifi_connected)
+        snprintf(buf, sizeof(buf), "IP: %s  %d DBM", wifi_ip_str, (int)wifi_rssi);
+    else
+        snprintf(buf, sizeof(buf), "IP: ---");
     draw_text(10, 61, buf, IMG_W);
 
-    if (wifi_connected) {
-        snprintf(buf, sizeof(buf), "SIGNAL: %d DBM", (int)wifi_rssi);
-        draw_text(10, 74, buf, IMG_W);
-    }
+    snprintf(buf, sizeof(buf), "NTP: %s", ntp_synced ? "SYNCED" : "NOT SYNCED");
+    draw_text(10, 74, buf, IMG_W);
 
-    snprintf(buf, sizeof(buf), "NTP: %s   TIME %s", ntp_synced ? "SYNCED" : "NOT SYNCED", age);
+    snprintf(buf, sizeof(buf), "TIME: %s", age);
     draw_text(10, 87, buf, IMG_W);
 
     snprintf(buf, sizeof(buf), "MODE: %s", mode);

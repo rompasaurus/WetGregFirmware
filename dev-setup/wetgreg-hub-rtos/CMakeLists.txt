@@ -92,6 +92,8 @@ add_executable(wetgreg_hub_rtos
     src/ui/octopus.c
     src/ui/screens_anim.c
     src/ui/screens_home.c
+    src/ui/text_ar.c
+    src/ui/i18n.c
     src/ui/screens_menu.c
     src/ui/screens_network.c
     src/ui/screens_social.c
