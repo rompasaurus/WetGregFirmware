@@ -110,7 +110,7 @@ void render_splash(uint32_t elapsed, uint32_t frame_idx) {
             int wy = -40 + (int)(70.0f * ti);    /* "WET" settles at y=30 */
             if (lang_is_ar()) {
                 ar_title_centered(0, 122, wy, "ويت");
-                ar_title_centered(0, 122, wy + 20, "جريج");
+                ar_title_centered(0, 122, wy + 24, "جريج");   /* 18 px glyphs: 24 px apart */
             } else {
                 draw_text_2x((122 - 46) / 2, wy, "WET");
                 draw_text_2x((122 - 62) / 2, wy + 18, "GREG");

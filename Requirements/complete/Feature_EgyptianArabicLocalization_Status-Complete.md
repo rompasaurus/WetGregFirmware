@@ -23,19 +23,34 @@
   `ENGLISH ↔ ARABIC`. Stored in `g_saved.language` (appended to the flash
   settings image; old images read `0xFF` and sanitise to English, so no magic
   bump). Default is English; factory reset returns to English.
-- **Arabic quote pack** `quotes_ar.h`: a 1:1 twin of `quotes.h` — same index,
-  same mood, 956 quotes in Cairo-dialect Egyptian Arabic. Puns and idioms were
-  adapted rather than translated (كشري, طعمية, النتيجة, روشنة…), the all-ages
-  rule applies unchanged, and religion/politics references were avoided. Max
-  length 66 characters (hard cap 80).
+- **Arabic quote pack** `quotes_ar.h`: a stand-alone set of **945 original
+  Egyptian-Arabic one-liners**, written from the ground up for Egyptian users
+  (not a translation of `quotes.h`). 55 per mood (60 for HUNGRY and FULL),
+  Cairo/Alexandria dialect, built on Egyptian daily life (الميكروباص، الفكة،
+  جروب العيلة، البواب، النتيجة), food culture (كشري، فول، ملوخية وشهقتها، محشي،
+  كحك), places (الكورنيش، الترماي، التحرير، الغردقة), bent proverbs (ابن الوز
+  عوام، على قد لحافك…), light film/TV/cartoon allusions (بكار، سبيس تون، مسرح
+  مصر) and Egyptian comedy devices (القفشة، المبالغة، التريقة على النفس، الرد
+  الجاهز). The voice, reference bank, mood briefs and hard rules live in
+  `docs/12-ARABIC-QUOTE-STYLE-GUIDE.md`. Rules beyond the English all-ages
+  rule: no religion, no politics, no substances, no regional stereotypes, no
+  death idioms. Max length 74 characters (hard cap 80); every quote verified
+  to fit both bubbles.
+- The table has its own length and mood tags: `pick_quote()` filters whichever
+  table is active, `quote_at()` clamps a stale index, and toggling the language
+  re-picks a quote.
 - **Arabic text renderer** `src/ui/text_ar.c`: UTF-8 decode → contextual
   shaping (isolated/initial/medial/final + lam-alef ligatures) → word-wrapped
   right-to-left layout with digit runs kept left-to-right. ASCII punctuation
   falls back to the 5×7 Latin font on the Arabic baseline.
 - **Bitmap fonts** `src/ui/font_ar.h`: Noto Kufi Arabic rasterised to 1-bit by
-  `dev-setup/tools/arfont.py` in three sizes — 10 px for menus/labels, 11 px
-  for the quote bubble, 16 px for titles and the intro story (presentation
-  forms U+FE80–FEFC, Arabic-Indic digits, ، ؟). ~30 KB flash in total.
+  `dev-setup/tools/arfont.py` in three sizes — 11 px for menus/labels, 13 px
+  for the quote bubble, 18 px for titles and the intro story (presentation
+  forms U+FE80–FEFC, Arabic-Indic digits, ، ؟). ~40 KB flash in total. The
+  quote bubbles grow in Arabic mode to hold the bigger glyphs (wide: 74 px
+  tall, 4 lines; tall: full width, 5 lines) and every quote is checked to fit.
+  In the tall layout the block under Greg (mood name, steps row) uses the
+  18 px font, with the octopus moved 4 px up to make room.
 - **Localized home screen** when Arabic is active: quote bubble (wide: 4 lines;
   tall: bubble grows upward to fit 5 lines), mood tag (`mood_names_ar[]`),
   date/time header with Arabic month names and Arabic-Indic digits (ص/م for
@@ -62,7 +77,7 @@
 
 - [x] **AC1:** Language selectable from Settings; default English.
 - [x] **AC2:** Choice persists across reboot and power-off (flash settings store).
-- [x] **AC3:** Every English quote has an Egyptian-Arabic counterpart with the same mood id (validated by script: count, charset, length).
+- [x] **AC3:** Every mood has a full set of original Egyptian-Arabic quotes (55+), validated by script: format, charset, length, duplicates, banned words.
 - [x] **AC4:** Arabic renders joined and right-to-left on both orientations within the existing bubble geometry (host-rendered check of `text_ar.c`).
 - [ ] **AC5:** Verified on hardware (legibility of 11 px Kufi on the panel; bubble fit for the longest quotes).
 
@@ -71,12 +86,13 @@
 ## Notes for maintainers
 
 - Regenerate the fonts after changing size/face:
-  `python3 dev-setup/tools/arfont.py header dev-setup/wetgreg-hub-rtos/src/ui/font_ar.h /usr/share/fonts/noto/NotoKufiArabic-Regular.ttf font_ar_ui:10 font_ar_q:11 font_ar_big:16`
+  `python3 dev-setup/tools/arfont.py header dev-setup/wetgreg-hub-rtos/src/ui/font_ar.h /usr/share/fonts/noto/NotoKufiArabic-Regular.ttf font_ar_ui:11 font_ar_q:13 font_ar_big:18`
   (`preview <ttf> <size> out.png` renders sample lines first). Needs Pillow + the Noto fonts on the host.
 - Adding a new screen string: write the English literal as usual and add a row
   to `src/ui/i18n.c`. Prefer "KEY: VALUE" for lines with live data so only the
   key needs an entry. Strings with no entry simply stay English.
-- When quotes are added to `quotes.h`, add the Arabic twin at the same index in
-  `quotes_ar.h`; both tables are `QUOTE_COUNT` long so a mismatch fails the build.
+- The two quote tables are independent: add English lines to `quotes.h` and
+  Arabic lines to `quotes_ar.h` (bump `QUOTE_AR_COUNT`). Write new Arabic lines
+  in the voice of `docs/12-ARABIC-QUOTE-STYLE-GUIDE.md`, never as translations.
 - Allowed Arabic charset: letters U+0621–064A (no tashkeel, no tatweel),
   digits ٠–٩, space, `. ، ؟ ! - %`. Anything else draws as a blank.

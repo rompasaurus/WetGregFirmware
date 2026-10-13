@@ -6,8 +6,8 @@
  * the lam-alef ligatures) → word-wrapped lines laid out right-to-left, with
  * digit/Latin runs kept left-to-right inside the line.
  *
- * Three sizes live in font_ar.h: AR_FONT_UI (10 px) for menus and labels,
- * AR_FONT_Q (11 px) for the quote bubble, AR_FONT_BIG (16 px) for titles and
+ * Three sizes live in font_ar.h: AR_FONT_UI (11 px) for menus and labels,
+ * AR_FONT_Q (13 px) for the quote bubble, AR_FONT_BIG (18 px) for titles and
  * the intro story. Charset: Arabic letters, Arabic-Indic digits ٠-٩, ، ؟ and
  * space from the Arabic font; ASCII digits, A-Z and . - ! % : fall back to the
  * 5×7 Latin font sitting on the Arabic baseline. Anything else is blank.
@@ -28,11 +28,8 @@ extern const ar_font_t *const AR_FONT_UI;
 extern const ar_font_t *const AR_FONT_Q;
 extern const ar_font_t *const AR_FONT_BIG;
 
-/* Line pitch / cell height for the quote font (used by the home screen). */
-#define TEXT_AR_PITCH 15
-#define TEXT_AR_ROWS  17
-
-/* Metrics of any font: cell rows, baseline row, a sensible line pitch. */
+/* Metrics of any font: cell rows, baseline row, a sensible line pitch. Layout
+ * code derives its geometry from these so a font-size change is one regen. */
 int ar_font_rows(const ar_font_t *f);
 int ar_font_baseline(const ar_font_t *f);
 int ar_font_pitch(const ar_font_t *f);

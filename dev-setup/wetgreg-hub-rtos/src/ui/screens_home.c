@@ -78,9 +78,9 @@ void draw_clock_header(void) {
     draw_text(header_x, 1, buf, IMG_W);
 }
 
-/* ─── Chat bubble (wide layout) ─── */
-static void draw_bubble(void) {
-    int bx = 75, by = 5 + Y_OFF, bw = 170, bh = 70;
+/* ─── Chat bubble (wide layout); bh = box height (70 Latin, taller for Arabic) ─── */
+static void draw_bubble(int bh) {
+    int bx = 75, by = 5 + Y_OFF, bw = 170;
     /* Top/bottom edges (double thick) */
     for (int x = bx + 3; x < bx + bw - 3; x++) {
         px_set(x, by); px_set(x, by + 1);
@@ -116,18 +116,23 @@ void render_frame(const Quote *q, int expr, uint32_t frame_idx) {
     draw_octopus(q, expr, frame_idx);
 
     /* Chat bubble + quote */
-    draw_bubble();
     int mood = current_mood < 0 ? q->mood : current_mood;
     if (lang_is_ar()) {
-        /* Right-aligned inside the bubble (x 81..239), 4 lines of 15 px fit
-         * between the bubble's top edge and its bottom (y 23..87). */
+        /* Taller bubble (y 17..90) so 4 lines of the 13 px quote font fit:
+         * cells at 20, 37, 54, 71 → last body row 84, descenders 88.
+         * Right-aligned at the bubble's inner edge (x 239). */
+        draw_bubble(74);
         draw_text_ar(239, 8 + Y_OFF, q->text, 158, 4);
-        int tag_y = 5 + 70 + 3 + Y_OFF;
+        /* Mood tag under the bubble in the quote font: cell top 91 → body
+         * 95..104, descenders 108 — clear of the STEPS/DOWN:MENU row the app
+         * draws at the bottom (body 112..121). */
+        int tag_y = 5 + Y_OFF + 74;
         char tag[48];
         snprintf(tag, sizeof(tag), "- %s -", mood_names_ar[mood]);
-        draw_text_ar(239, tag_y, tag, 170, 1);        /* cell top at 90, body to ~104 */
+        draw_text_ar_f(AR_FONT_Q, 239, tag_y, tag, 170, 1, 0);   /* quote-size tag */
         return;
     }
+    draw_bubble(70);
     draw_text(81, 11 + Y_OFF, q->text, 158);
 
     /* Tagline — current mood/emotion name */
@@ -160,13 +165,15 @@ void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
     {
         datetime_t t; rtc_get_datetime(&t);
         if (ar) {
-            /* "١٢ أبريل  ٣:٤٧ م": cell top at 5 → body on y 10..19, descenders
-             * just reach the divider at 24. */
+            /* "١٢ أبريل ٣:٤٧ م" in the UI font (11 px: the quote font would
+             * overflow 122 px on long months): cell top 5 → body on y 10..19,
+             * descenders just reach the divider at 24. */
             char d[8], tm[24], line[48];
             ar_itoa(d, sizeof(d), (unsigned)t.day);
             ar_time(tm, sizeof(tm), &t);
-            snprintf(line, sizeof(line), "%s %s  %s", d, month_names_ar[t.month - 1], tm);
-            draw_text_ar_centered(0, 122, 5, line);
+            snprintf(line, sizeof(line), "%s %s %s", d, month_names_ar[t.month - 1], tm);
+            int tw = text_ar_width_f(AR_FONT_UI, line);
+            draw_text_ar_f(AR_FONT_UI, (122 + tw) / 2, 5, line, 122, 1, 0);
         } else {
             int hr12 = t.hour % 12; if (hr12 == 0) hr12 = 12;
             const char *ampm = (t.hour < 12) ? "AM" : "PM";
@@ -185,10 +192,11 @@ void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
     /* ── Quote bubble — dropped DOWN so its bottom sits just above the octopus
      *    head (~y125), with a speech-tail caret at the bottom-right so it reads
      *    like a quote. Text is CAPPED so it can't overrun the face. Arabic
-     *    lines are 15 px tall, so the bubble grows upward into the empty band
-     *    under the status bar to keep 5 lines. ── */
+     *    lines are 17 px tall, so the bubble takes the full width and grows
+     *    upward into the empty band under the status bar to keep 5 lines
+     *    (every quote in quotes_ar.h fits 5 lines at 111 px — checked). ── */
     {
-        const int bx0 = 4, by0 = ar ? 30 : 48, bx1 = 117, by1 = 120;
+        const int bx0 = ar ? 1 : 4, by0 = ar ? 28 : 48, bx1 = ar ? 120 : 117, by1 = 120;
         for (int x = bx0 + 2; x <= bx1 - 2; x++) { px_set(x, by0); px_set(x, by1); }
         for (int y = by0 + 2; y <= by1 - 2; y++) { px_set(bx0, y); px_set(bx1, y); }
 
@@ -200,8 +208,9 @@ void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
         for (int x = bx1 - 25; x < bx1 - 8; x++) px_clr(x, by1);                /* open the mouth */
 
         if (ar) {
-            /* 5 lines × 15 px from y 34 → last cell ends at 109, inside the box. */
-            draw_text_ar(bx1 - 4, by0 + 4, q->text, (bx1 - bx0) - 8, 5);
+            /* 5 lines × 17 px from y 31 → cells 31..99; the last line's body
+             * ends at 112 and its descenders at 116, inside the box (120). */
+            draw_text_ar(bx1 - 3, by0 + 3, q->text, (bx1 - bx0) - 8, 5);
         } else {
             char qbuf[96];
             snprintf(qbuf, sizeof(qbuf), "%s", q->text);
@@ -213,7 +222,7 @@ void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
     /* ── Octopus, moved down so the gaps above (bubble) and below (status
      *    block) are roughly even. Face lands ~y150. ── */
     const int OCT_OX = (122 - 65) / 2 - 5;
-    const int OCT_OY = 113;
+    const int OCT_OY = ar ? 109 : 113;    /* Arabic: 4 px higher → room for the 18 px rows below */
     layout_ox = OCT_OX;
     layout_oy = OCT_OY;
     draw_octopus(q, expr, frame_idx);
@@ -231,19 +240,24 @@ void render_octopus_tall(const Quote *q, int expr, uint32_t frame_idx) {
     /* ── Bottom status block, pushed to the very bottom. Order (top→bottom):
      *    emotion state (centered), then STEPS (label left / count right). ── */
     {
-        const int blk_div = 214, mood_y = 220, step_y = 234;
+        /* Arabic uses the 18 px headline font for both rows; the octopus sits
+         * 4 px higher there (art ends ~201) and the divider moves up to 205. */
+        const int blk_div = ar ? 205 : 214, mood_y = 220, step_y = 234;
         for (int x = 4; x < 118; x++) px_set(x, blk_div);
 
         int mood = current_mood < 0 ? q->mood : current_mood;
         if (ar) {
-            /* Mood cell top at 215 (body 220..229); "خطوات" right, count left
-             * (Arabic-Indic digits), cell top at 231 (body 236..245). */
+            /* 18 px cells are 26 rows with the body on rows 5..18 and
+             * descenders to 22: mood cell top 203 → body 208..221, descenders
+             * 225; steps cell top 227 → body 232..245, descenders 249. No
+             * dashes around the mood: "واحشني البيت" alone is 104 of 122 px. */
             char mt[48], cnt[16];
-            snprintf(mt, sizeof(mt), "- %s -", mood_names_ar[mood]);
-            draw_text_ar_centered(0, 122, mood_y - 5, mt);
+            snprintf(mt, sizeof(mt), "%s", mood_names_ar[mood]);
+            int mw = text_ar_width_f(AR_FONT_BIG, mt);
+            draw_text_ar_f(AR_FONT_BIG, (122 + mw) / 2, 203, mt, 122, 1, 0);
             ar_itoa(cnt, sizeof(cnt), (unsigned)steps_today);
-            draw_text_ar(118, step_y - 3, "خطوات", 60, 1);
-            draw_text_ar(4 + text_ar_width(cnt), step_y - 3, cnt, 60, 1);
+            draw_text_ar_f(AR_FONT_BIG, 118, 227, "خطوات", 70, 1, 0);               /* label right */
+            draw_text_ar_f(AR_FONT_BIG, 4 + text_ar_width_f(AR_FONT_BIG, cnt), 227, cnt, 60, 1, 0); /* count left */
         } else {
             char mt[40];
             snprintf(mt, sizeof(mt), "- %s -", mood_names[mood]);

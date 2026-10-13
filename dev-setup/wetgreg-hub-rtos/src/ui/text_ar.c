@@ -448,7 +448,7 @@ int ar_ui_inverted(int y, const char *text) {
 
     const ar_font_t *f = AR_FONT_UI;
     int hx_end = canvas_w - 6;
-    for (int hy = y - 2; hy < y + 10; hy++)             /* 12-row bar: body + most descenders */
+    for (int hy = y - 3; hy < y + 11; hy++)             /* 14-row bar: 11 px body + most descenders */
         for (int hx = 6; hx < hx_end; hx++) px_set(hx, hy);
     int x_right = canvas_w - 10;
     g_invert = 1;

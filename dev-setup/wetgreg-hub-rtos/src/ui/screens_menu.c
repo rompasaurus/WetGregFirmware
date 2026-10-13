@@ -15,6 +15,7 @@
 #include "display.h"      /* DISPLAY_NAME (info screen) */
 #include "motion.h"
 #include "octopus.h"      /* mood names + current_mood; QUOTE_COUNT via quotes.h */
+#include "quotes_ar.h"    /* QUOTE_AR_COUNT only (the table itself is unreferenced here) */
 #include "power.h"        /* g_batt_pct / g_batt_v (info screen) */
 #include "rtc_clock.h"
 #include "rtos_tasks.h"   /* display_render (mid-scan frame in render_i2c_scan) */
@@ -360,7 +361,7 @@ void render_info_screen(void) {
     snprintf(buf, sizeof(buf), "MOOD: %s", current_mood < 0 ? "ALL" : mood_names[current_mood]);
     draw_text(10, y, buf, IMG_W); y += 11;
 
-    snprintf(buf, sizeof(buf), "QUOTES: %d", QUOTE_COUNT);
+    snprintf(buf, sizeof(buf), "QUOTES: %d", lang_is_ar() ? QUOTE_AR_COUNT : QUOTE_COUNT);
     draw_text(10, y, buf, IMG_W); y += 11;
 
     snprintf(buf, sizeof(buf), "WIFI: %s", wifi_connected ? wifi_ip_str : "OFF");

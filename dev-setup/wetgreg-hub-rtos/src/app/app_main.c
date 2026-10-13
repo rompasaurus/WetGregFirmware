@@ -114,26 +114,34 @@ static bool bt_enabled = false;
  * read, then goes back to sleep after this long if the cell is still flat. */
 #define BATT_CRIT_AWAKE_MS  15000u
 
-/* The quote to show for index i in the current language. Both tables share
- * the index and the mood, so mood filtering only ever looks at quotes[]. */
+/* The active quote table: English, or the stand-alone Egyptian-Arabic set
+ * (its own length and its own mood mix — not a translation). Indices only
+ * ever mean something within one table, so quote_at() clamps in case the
+ * language changed under a stale index. */
+static inline const Quote *active_quotes(void) { return lang_is_ar() ? quotes_ar : quotes; }
+static inline int active_quote_count(void)      { return lang_is_ar() ? QUOTE_AR_COUNT : QUOTE_COUNT; }
 static inline const Quote *quote_at(int i) {
-    return lang_is_ar() ? &quotes_ar[i] : &quotes[i];
+    int n = active_quote_count();
+    if (i < 0 || i >= n) i = 0;
+    return &active_quotes()[i];
 }
 
 /* ─── Pick a quote matching current_mood, or random if -1 ─── */
 static int pick_quote(void) {
+    const Quote *tab = active_quotes();
+    int n = active_quote_count();
     if (current_mood < 0)
-        return rng_next() % QUOTE_COUNT;
+        return rng_next() % n;
 
     /* Collect indices matching the mood */
-    int matches[QUOTE_COUNT];
+    static int matches[QUOTE_MAX_COUNT];      /* static: keeps ~4 KB off the task stack */
     int count = 0;
-    for (int i = 0; i < QUOTE_COUNT; i++) {
-        if (quotes[i].mood == (uint8_t)current_mood)
+    for (int i = 0; i < n; i++) {
+        if (tab[i].mood == (uint8_t)current_mood)
             matches[count++] = i;
     }
     if (count == 0)
-        return rng_next() % QUOTE_COUNT;  /* fallback */
+        return rng_next() % n;  /* fallback */
     return matches[rng_next() % count];
 }
 
@@ -703,6 +711,7 @@ static void app_task(void *param) {
                              * survives reboots. The next home frame picks up the
                              * matching quote table and labels automatically. */
                             language_store((uint8_t)((g_saved.language + 1) % LANG_COUNT));
+                            qi = pick_quote();           /* the tables differ: fresh index */
                             speaker_tone(1200, 50);
                             break;                       /* stay on the menu, redraw */
                         case SET_ITEM_RESET:     state = STATE_RESET_CONFIRM; break;
