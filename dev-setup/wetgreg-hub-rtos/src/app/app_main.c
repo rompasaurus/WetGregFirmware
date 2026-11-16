@@ -118,8 +118,19 @@ static bool bt_enabled = false;
  * (its own length and its own mood mix — not a translation). Indices only
  * ever mean something within one table, so quote_at() clamps in case the
  * language changed under a stale index. */
+#ifdef WETGREG_FILTHY
+/* FILTHY edition: Settings → FILTHY picks the English table at run time
+ * (Arabic has no filthy twin, so it is unaffected). */
+static inline const Quote *active_quotes(void) {
+    return lang_is_ar() ? quotes_ar : filthy_is_on() ? quotes_filthy : quotes;
+}
+static inline int active_quote_count(void) {
+    return lang_is_ar() ? QUOTE_AR_COUNT : filthy_is_on() ? QUOTE_FILTHY_COUNT : QUOTE_COUNT;
+}
+#else
 static inline const Quote *active_quotes(void) { return lang_is_ar() ? quotes_ar : quotes; }
 static inline int active_quote_count(void)      { return lang_is_ar() ? QUOTE_AR_COUNT : QUOTE_COUNT; }
+#endif
 static inline const Quote *quote_at(int i) {
     int n = active_quote_count();
     if (i < 0 || i >= n) i = 0;
@@ -173,8 +184,9 @@ static TaskHandle_t g_app_task = NULL;
 int main(void) {
     stdio_init_all();
     sleep_ms(50);   /* brief settle; was 1000ms of pure boot delay for USB serial */
-    printf("WETGREG HUB v%s (%s) | display: %s | %d quotes | built %s %s\n",
-           WETGREG_VERSION, WETGREG_VERSION_DATE, DISPLAY_NAME, QUOTE_COUNT, __DATE__, __TIME__);
+    printf("WETGREG HUB v%s (%s) | display: %s | %d quotes (%s) | built %s %s\n",
+           WETGREG_VERSION, WETGREG_VERSION_DATE, DISPLAY_NAME, QUOTE_COUNT, QUOTE_EDITION,
+           __DATE__, __TIME__);
 
     init_rtc_from_compile_time();
 
@@ -714,6 +726,16 @@ static void app_task(void *param) {
                             qi = pick_quote();           /* the tables differ: fresh index */
                             speaker_tone(1200, 50);
                             break;                       /* stay on the menu, redraw */
+#ifdef WETGREG_FILTHY
+                        case SET_ITEM_FILTHY:
+                            /* Flip between the filthy and the clean English
+                             * table; persisted. Nothing to flip in Arabic. */
+                            if (lang_is_ar()) { speaker_tone(300, 80); break; }
+                            filthy_store(!filthy_is_on());
+                            qi = pick_quote();           /* the tables differ: fresh index */
+                            speaker_tone(1200, 50);
+                            break;                       /* stay on the menu, redraw */
+#endif
                         case SET_ITEM_RESET:     state = STATE_RESET_CONFIRM; break;
                         default:                 state = STATE_MENU; break;
                     }

@@ -14,7 +14,13 @@
 #include "quotes.h"
 
 #define QUOTE_AR_COUNT 945
-#define QUOTE_MAX_COUNT (QUOTE_COUNT > QUOTE_AR_COUNT ? QUOTE_COUNT : QUOTE_AR_COUNT)
+/* Largest table in this build — sizes pick_quote()'s scratch buffer. */
+#define QUOTE_MAX2(a, b) ((a) > (b) ? (a) : (b))
+#ifdef WETGREG_FILTHY
+#define QUOTE_MAX_COUNT QUOTE_MAX2(QUOTE_MAX2(QUOTE_COUNT, QUOTE_AR_COUNT), QUOTE_FILTHY_COUNT)
+#else
+#define QUOTE_MAX_COUNT QUOTE_MAX2(QUOTE_COUNT, QUOTE_AR_COUNT)
+#endif
 
 static const Quote quotes_ar[QUOTE_AR_COUNT] = {
     /* ── NORMAL (0) ── */

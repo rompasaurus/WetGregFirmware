@@ -121,6 +121,29 @@ target_include_directories(wetgreg_hub_rtos PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/e-Paper
 )
 
+# --- Quote edition: CLEAN (default, all-ages) or FILTHY (adults only) ---------
+# -DGREG_EDITION=FILTHY compiles quotes_filthy.h in next to the clean table,
+# adds the Settings -> FILTHY: ON/OFF toggle, and renames the output to
+# wetgreg_hub_rtos_filthy.uf2 so the two images can never be confused.
+# The Docker build passes no -D for this, so the GREG_EDITION environment
+# variable is honoured too (the devtool sets it with `docker compose run -e`).
+if(NOT DEFINED GREG_EDITION AND DEFINED ENV{GREG_EDITION})
+    set(GREG_EDITION "$ENV{GREG_EDITION}")
+endif()
+if(NOT DEFINED GREG_EDITION OR GREG_EDITION STREQUAL "")
+    set(GREG_EDITION "CLEAN")
+endif()
+string(TOUPPER "${GREG_EDITION}" GREG_EDITION)
+if(GREG_EDITION STREQUAL "FILTHY")
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE WETGREG_FILTHY=1)
+    if(NOT PICOWOTA_OTA)   # picowota derives its artifact names from the target
+        set_target_properties(wetgreg_hub_rtos PROPERTIES OUTPUT_NAME wetgreg_hub_rtos_filthy)
+    endif()
+elseif(NOT GREG_EDITION STREQUAL "CLEAN")
+    message(FATAL_ERROR "GREG_EDITION must be CLEAN or FILTHY (got '${GREG_EDITION}')")
+endif()
+message(STATUS "Quote edition: ${GREG_EDITION}")
+
 # --- Libraries we link against ----------------------------------------------
 target_link_libraries(wetgreg_hub_rtos
     pico_stdlib            # core SDK (GPIO, time, stdio, ...)

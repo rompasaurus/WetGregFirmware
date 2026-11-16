@@ -179,7 +179,11 @@ void render_mood_select(int selected) {
 
 /* ─── Settings submenu (connectivity + display + time + factory reset) ─── */
 static const char *set_items[SET_MENU_COUNT] = {
-    "NETWORK", "BLUETOOTH", "DISPLAY", "SET TIME", "LANGUAGE", "RESET WETGREG", "BACK",
+    "NETWORK", "BLUETOOTH", "DISPLAY", "SET TIME", "LANGUAGE",
+#ifdef WETGREG_FILTHY
+    "FILTHY",
+#endif
+    "RESET WETGREG", "BACK",
 };
 
 void render_settings_menu(int sel) {
@@ -194,16 +198,30 @@ void render_settings_menu(int sel) {
     char it_lang[28];
     snprintf(it_lang, sizeof(it_lang), "LANGUAGE: %s", lang_is_ar() ? "ARABIC" : "ENGLISH");
 
-    /* Wide: 7 rows on a 12 px pitch keep the footer hint clear at y=108. */
-    int y = tall ? 34 : 20, dy = tall ? 22 : 12;
+    bool toggle_row = (sel == SET_ITEM_LANGUAGE);
+#ifdef WETGREG_FILTHY
+    /* FILTHY edition: which quote table Greg reads from. English only — the
+     * Arabic set has no filthy twin, so the row says so instead of lying. */
+    char it_filthy[28];
+    snprintf(it_filthy, sizeof(it_filthy), "FILTHY: %s",
+             lang_is_ar() ? "ENGLISH ONLY" : filthy_is_on() ? "ON" : "OFF");
+    toggle_row = toggle_row || (sel == SET_ITEM_FILTHY);
+#endif
+
+    /* Wide: 7 rows on a 12 px pitch keep the footer hint clear at y=108; the
+     * FILTHY edition's 8th row tightens that to 11 px (rows are 9 px tall). */
+    int y = tall ? 34 : 20, dy = tall ? 22 : (SET_MENU_COUNT > 7 ? 11 : 12);
     for (int i = 0; i < SET_MENU_COUNT; i++) {
         int yy = y + i * dy; char l[36];
         const char *it = (i == SET_ITEM_LANGUAGE) ? it_lang : set_items[i];
+#ifdef WETGREG_FILTHY
+        if (i == SET_ITEM_FILTHY) it = it_filthy;
+#endif
         if (i == sel) { snprintf(l, sizeof(l), "> %s", it); draw_inverted_line(yy, l); }
         else          { snprintf(l, sizeof(l), "  %s", it); draw_text(8, yy, l, canvas_w); }
     }
     draw_text(8, tall ? 232 : 108,
-              sel == SET_ITEM_LANGUAGE ? "C:TOGGLE  L:BACK" : "C:SELECT  L:BACK", canvas_w);
+              toggle_row ? "C:TOGGLE  L:BACK" : "C:SELECT  L:BACK", canvas_w);
 }
 
 /* ─── Display settings (auto-rotate + orientation) ─── */
@@ -361,7 +379,11 @@ void render_info_screen(void) {
     snprintf(buf, sizeof(buf), "MOOD: %s", current_mood < 0 ? "ALL" : mood_names[current_mood]);
     draw_text(10, y, buf, IMG_W); y += 11;
 
-    snprintf(buf, sizeof(buf), "QUOTES: %d", lang_is_ar() ? QUOTE_AR_COUNT : QUOTE_COUNT);
+    int n_quotes = lang_is_ar() ? QUOTE_AR_COUNT : QUOTE_COUNT;
+#ifdef WETGREG_FILTHY
+    if (!lang_is_ar() && filthy_is_on()) n_quotes = QUOTE_FILTHY_COUNT;
+#endif
+    snprintf(buf, sizeof(buf), "QUOTES: %d", n_quotes);
     draw_text(10, y, buf, IMG_W); y += 11;
 
     snprintf(buf, sizeof(buf), "WIFI: %s", wifi_connected ? wifi_ip_str : "OFF");

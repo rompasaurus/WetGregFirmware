@@ -3,7 +3,7 @@
  * here as a static header so the firmware builds standalone. Regenerate
  * only if the quote set changes.
  *
- * ALL-AGES RULE: Greg is for everyone. No swearing, no innuendo, no
+ * ALL-AGES RULE (this table): Greg is for everyone. No swearing, no innuendo, no
  * death/violence jokes, no diet or body shaming, no real-world tragedy.
  * Sass and gross-out nature facts are fine. Charset is A-Z 0-9 space
  * and . , - % only (no apostrophes), keep each quote under ~84 chars. */
@@ -13,9 +13,22 @@
 #include <stdint.h>
 
 #define TAGLINE "~ WETGREG HUB RTOS ~"
-#define QUOTE_COUNT 956
 
 typedef struct { const char *text; uint8_t mood; } Quote;
+
+/* Two editions, chosen at build time (CMake -DGREG_EDITION=CLEAN|FILTHY):
+ *   CLEAN  (default) - only the all-ages table below. No filth in the image
+ *                      and no way to turn any on.
+ *   FILTHY           - this table PLUS quotes_filthy.h (adults only, no
+ *                      filter), with a Settings -> FILTHY: ON/OFF toggle that
+ *                      picks which one Greg reads from (storage.h,
+ *                      filthy_is_on()). Ships with the toggle ON. */
+#ifdef WETGREG_FILTHY
+#define QUOTE_EDITION "FILTHY"
+#else
+#define QUOTE_EDITION "CLEAN"
+#endif
+#define QUOTE_COUNT 956
 
 static const Quote quotes[QUOTE_COUNT] = {
     {"WIFI IS JUST SPICY AIR.", 0},
@@ -977,5 +990,9 @@ static const Quote quotes[QUOTE_COUNT] = {
     {"PENGUINS GIVE PEBBLES AS GIFTS. ROCKS ARE A LOVE LANGUAGE.", 16},
     {"AN OCTOPUS HAS ABOUT 2000 SUCKERS. I COUNTED. TWICE.", 16},
 };
+
+#ifdef WETGREG_FILTHY
+#include "quotes_filthy.h"   /* quotes_filthy[] + QUOTE_FILTHY_COUNT */
+#endif
 
 #endif /* QUOTES_H */

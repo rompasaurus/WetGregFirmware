@@ -52,6 +52,10 @@ typedef struct {
     char         last_ssid[33];        /* last network joined — the daily time-sync target */
     /* ── Language (appended; 0xFF on old images → sanitised to English). ── */
     uint8_t      language;             /* LANG_EN (default) / LANG_AR (Egyptian Arabic) */
+    /* ── Filthy quotes (appended; 0xFF on old images → sanitised to ON). Only
+     * the FILTHY edition has the table and the Settings row; the all-ages
+     * build keeps the byte for layout but never reads it. ── */
+    uint8_t      filthy_quotes;        /* 1 = filthy table (default), 0 = clean table */
 } saved_store_t;
 
 #define WIFI_MODE_SYNC_ONLY 0          /* join → NTP → drop (and once a day in the background) */
@@ -88,6 +92,17 @@ void        wifi_last_ssid_store(const char *ssid); /* no-op (no flash wear) whe
 /* Language (persist). lang_is_ar() is the one check every renderer uses. */
 void        language_store(uint8_t lang);
 static inline int lang_is_ar(void) { return g_saved.language == LANG_AR; }
+
+/* Filthy quotes toggle (persist). filthy_is_on() is the one check the quote
+ * picker and the menus use; it is hard-wired to 0 in the all-ages build, so
+ * no stored byte can ever make that firmware swear. English only — the Arabic
+ * table has no filthy twin. */
+void        filthy_store(uint8_t on);
+#ifdef WETGREG_FILTHY
+static inline int filthy_is_on(void) { return g_saved.filthy_quotes != 0; }
+#else
+static inline int filthy_is_on(void) { return 0; }
+#endif
 
 /* Identity */
 void        wetgreg_set_name(const char *name);

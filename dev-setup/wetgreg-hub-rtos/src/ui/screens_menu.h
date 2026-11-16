@@ -40,14 +40,21 @@ void render_text_tall(const char *title, const char *const *lines, int n);
 void render_mood_select(int selected);
 
 /* ─── Settings submenu ─── */
-#define SET_MENU_COUNT 7
 #define SET_ITEM_NETWORK   0
 #define SET_ITEM_BLUETOOTH 1
 #define SET_ITEM_DISPLAY   2
 #define SET_ITEM_SET_TIME  3
 #define SET_ITEM_LANGUAGE  4    /* CENTER cycles ENGLISH → ARABIC (persisted) */
+#ifdef WETGREG_FILTHY           /* FILTHY edition only: one extra row */
+#define SET_ITEM_FILTHY    5    /* CENTER toggles FILTHY: ON/OFF (persisted) */
+#define SET_ITEM_RESET     6
+#define SET_ITEM_BACK      7
+#define SET_MENU_COUNT     8
+#else
 #define SET_ITEM_RESET     5
 #define SET_ITEM_BACK      6
+#define SET_MENU_COUNT     7
+#endif
 void render_settings_menu(int sel);
 
 /* ─── Display settings (auto-rotate + orientation) ─── */

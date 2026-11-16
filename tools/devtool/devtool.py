@@ -26,6 +26,7 @@ It also has a CLI for headless use (build/flash from a script or over SSH):
     python3 devtool.py info          # picotool device info
     python3 devtool.py flash         # flash existing build/wetgreg_hub_rtos.uf2
     python3 devtool.py build-flash   # clean Docker build, then flash
+    python3 devtool.py build-flash --edition filthy   # the adults-only quote set
     python3 devtool.py reboot        # reboot the Pico into BOOTSEL
     python3 devtool.py erase         # full chip erase (recovery)
     python3 devtool.py deps          # check the toolchain dependencies
@@ -52,9 +53,34 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEV_SETUP    = PROJECT_ROOT / "dev-setup"
 RTOS_DIR     = DEV_SETUP / "wetgreg-hub-rtos"
 BUILD_DIR    = RTOS_DIR / "build"
-UF2_NAME     = "wetgreg_hub_rtos.uf2"
-UF2_PATH     = BUILD_DIR / UF2_NAME
 GUIDE_MD     = Path(__file__).resolve().parent / "DEVTOOL_GUIDE.md"
+
+# Quote editions. Each one is a separate firmware image with its own .uf2 name
+# (CMake renames the output), so the all-ages build and the adults-only build
+# can never be flashed by mistake for one another.
+#   clean  — quotes.h, the all-ages table (the default everywhere).
+#   filthy — adds quotes_filthy.h (no filter, ADULTS ONLY) next to the clean
+#            table, plus a Settings → FILTHY: ON/OFF toggle on the device.
+EDITIONS = {
+    "clean":  {"label": "Clean (all-ages)",     "uf2": "wetgreg_hub_rtos.uf2"},
+    "filthy": {"label": "Filthy (adults only)", "uf2": "wetgreg_hub_rtos_filthy.uf2"},
+}
+DEFAULT_EDITION = "clean"
+
+
+def uf2_path_for(edition=DEFAULT_EDITION):
+    """Path of the built .uf2 for a quote edition (it may not exist yet)."""
+    return BUILD_DIR / EDITIONS[edition]["uf2"]
+
+
+def built_edition():
+    """Which edition is sitting in build/ right now, or None. A clean build
+    wipes build/, so at most one edition exists at a time."""
+    for ed in EDITIONS:
+        if uf2_path_for(ed).exists():
+            return ed
+    return None
+
 
 DOCKER_SERVICE = "build-wetgreg-hub-rtos"
 PICO_BOARD     = "pico2_w"     # RP2350 (the WetGreg PCB carries a soldered Pico 2 W)
@@ -80,6 +106,41 @@ def _default_log(msg):
     print(msg, flush=True)
 
 
+WIN_PICOTOOL_DIR = Path.home() / ".picotool"
+
+
+def _install_picotool_windows(log=_default_log):
+    """Download the prebuilt Windows picotool from raspberrypi/pico-sdk-tools
+    into ~/.picotool (no admin rights, no compiler). Returns (ok, message)."""
+    import io
+    import json
+    import urllib.request
+    import zipfile
+    api = "https://api.github.com/repos/raspberrypi/pico-sdk-tools/releases/latest"
+    try:
+        req = urllib.request.Request(api, headers={"User-Agent": "wetgreg-devtool"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            rel = json.load(r)
+        asset = next((a for a in rel.get("assets", [])
+                      if a["name"].startswith("picotool") and "win" in a["name"]
+                      and a["name"].endswith(".zip")), None)
+        if not asset:
+            return False, f"no Windows picotool in release {rel.get('tag_name')}"
+        log(f"[picotool] downloading {asset['name']} ...")
+        req = urllib.request.Request(asset["browser_download_url"],
+                                     headers={"User-Agent": "wetgreg-devtool"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            data = r.read()
+        WIN_PICOTOOL_DIR.mkdir(parents=True, exist_ok=True)
+        zipfile.ZipFile(io.BytesIO(data)).extractall(WIN_PICOTOOL_DIR)
+    except Exception as e:                # noqa: BLE001
+        return False, (f"download failed: {e} — get picotool-*-x64-win.zip from "
+                       "https://github.com/raspberrypi/pico-sdk-tools/releases "
+                       f"and unzip it into {WIN_PICOTOOL_DIR}")
+    pt = find_picotool()
+    return (True, f"installed: {pt}") if pt else (False, "unzipped but picotool.exe not found")
+
+
 def find_picotool():
     """Locate the picotool binary. Returns a path string or None."""
     found = shutil.which("picotool")
@@ -93,6 +154,11 @@ def find_picotool():
         Path.home() / "pico" / "picotool" / "build" / "picotool",
         Path.home() / "picotool" / "build" / "picotool",
         Path("/usr/local/bin/picotool"),
+        # Windows: where install-deps.ps1 / the Install button put the prebuilt
+        # binary. Checked directly because a PATH change made by the installer
+        # is invisible to terminals (and DevTools) that were already open.
+        WIN_PICOTOOL_DIR / "picotool" / "picotool.exe",
+        WIN_PICOTOOL_DIR / "picotool.exe",
     ]
     for c in candidates:
         if c.exists():
@@ -280,8 +346,15 @@ def check_deps():
     return rows
 
 
-def docker_build(log=_default_log, progress=None):
-    """Clean Docker build of wetgreg-hub-rtos. Returns the .uf2 path or raises."""
+def docker_build(log=_default_log, progress=None, edition=DEFAULT_EDITION):
+    """Clean Docker build of wetgreg-hub-rtos. Returns the .uf2 path or raises.
+
+    `edition` picks the quote table ("clean" or "filthy", see EDITIONS); it is
+    handed to CMake through the GREG_EDITION environment variable."""
+    if edition not in EDITIONS:
+        raise RuntimeError(f"unknown edition '{edition}' (choose: {', '.join(EDITIONS)})")
+    uf2_name = EDITIONS[edition]["uf2"]
+    uf2_path = uf2_path_for(edition)
     def _p(v):
         if progress:
             progress(v)
@@ -323,9 +396,11 @@ def docker_build(log=_default_log, progress=None):
     _p(25)
 
     # 5. Compile (cmake + ninja inside the container).
-    log(f"[build] compiling ({PICO_BOARD}, display {DISPLAY_VARIANT}) ...")
+    log(f"[build] compiling ({PICO_BOARD}, display {DISPLAY_VARIANT}, "
+        f"{edition.upper()} edition) ...")
     proc = subprocess.Popen(["docker", "compose", "run", "--rm",
                              "-e", f"DISPLAY_VARIANT={DISPLAY_VARIANT}",
+                             "-e", f"GREG_EDITION={edition.upper()}",
                              "-e", f"PICO_BOARD={PICO_BOARD}", DOCKER_SERVICE],
                             cwd=str(DEV_SETUP), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
@@ -338,11 +413,11 @@ def docker_build(log=_default_log, progress=None):
         raise RuntimeError("firmware compile failed — see log")
     _p(45)
 
-    if not UF2_PATH.exists():
-        raise RuntimeError(f"build finished but {UF2_NAME} not found")
-    size_kb = UF2_PATH.stat().st_size // 1024
-    log(f"[build] OK — {UF2_NAME} ({size_kb} KB)")
-    return UF2_PATH
+    if not uf2_path.exists():
+        raise RuntimeError(f"build finished but {uf2_name} not found")
+    size_kb = uf2_path.stat().st_size // 1024
+    log(f"[build] OK — {uf2_name} ({size_kb} KB, {edition.upper()} edition)")
+    return uf2_path
 
 
 def flash_uf2(uf2_path, log=_default_log, progress=None):
@@ -423,9 +498,9 @@ def flash_uf2(uf2_path, log=_default_log, progress=None):
     log(f"[flash] done — {name} ({size_kb} KB) flashed")
 
 
-def clean_build_and_flash(log=_default_log, progress=None):
-    """Clean Docker build, then flash the produced .uf2."""
-    uf2 = docker_build(log, progress)
+def clean_build_and_flash(log=_default_log, progress=None, edition=DEFAULT_EDITION):
+    """Clean Docker build of the given quote edition, then flash the produced .uf2."""
+    uf2 = docker_build(log, progress, edition)
     log("[flash] build complete — flashing ...")
     # Re-map the 0-45 build progress onto 50-100 for the flash phase.
     flash_uf2(uf2, log, (lambda v: progress(50 + v // 2)) if progress else None)
@@ -499,6 +574,10 @@ def install_picotool(log=_default_log):
     if find_picotool():
         return True, f"picotool already installed: {find_picotool()}"
 
+    # 0. Windows: no package manager or compiler needed — grab the prebuilt exe.
+    if os.name == "nt":
+        return _install_picotool_windows(log)
+
     # 1. System package manager (the reliable path, esp. on Arch + GCC 15).
     cmd = _pkg_install_picotool_cmd()
     if cmd:
@@ -564,10 +643,14 @@ def _cli(argv):
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("gui", help="launch the GUI (default)")
     sub.add_parser("info", help="picotool device info")
-    f = sub.add_parser("flash", help="flash the existing build/wetgreg_hub_rtos.uf2")
+    f = sub.add_parser("flash", help="flash the existing build (no recompile)")
     f.add_argument("uf2", nargs="?", help="path to a .uf2 (defaults to the RTOS build)")
-    sub.add_parser("build-flash", help="clean Docker build, then flash")
-    sub.add_parser("build", help="clean Docker build only (no flash)")
+    bf = sub.add_parser("build-flash", help="clean Docker build, then flash")
+    b = sub.add_parser("build", help="clean Docker build only (no flash)")
+    for sp in (f, bf, b):
+        sp.add_argument("--edition", choices=sorted(EDITIONS), default=DEFAULT_EDITION,
+                        help="quote edition: clean = all-ages (default), "
+                             "filthy = adults-only no-filter quotes")
     sub.add_parser("reboot", help="reboot the Pico into BOOTSEL")
     sub.add_parser("erase", help="full chip erase (recovery)")
     sub.add_parser("deps", help="check toolchain dependencies")
@@ -592,17 +675,17 @@ def _cli(argv):
         ok, msg = full_erase(); print(msg); return 0 if ok else 1
     if cmd == "build":
         try:
-            docker_build(); return 0
+            docker_build(edition=args.edition); return 0
         except Exception as e:        # noqa: BLE001
             print(f"build failed: {e}", file=sys.stderr); return 1
     if cmd == "flash":
         try:
-            flash_uf2(args.uf2 or UF2_PATH); return 0
+            flash_uf2(args.uf2 or uf2_path_for(args.edition)); return 0
         except Exception as e:        # noqa: BLE001
             print(f"flash failed: {e}", file=sys.stderr); return 1
     if cmd == "build-flash":
         try:
-            clean_build_and_flash(); return 0
+            clean_build_and_flash(edition=args.edition); return 0
         except Exception as e:        # noqa: BLE001
             print(f"build+flash failed: {e}", file=sys.stderr); return 1
     return 0
@@ -762,6 +845,17 @@ the BOOTSEL button. If the status reads
 
 3 · Deploy (get firmware on)
 ────────────────────────────
+  • Edition
+      Pick which Greg you are deploying. Every
+      button below acts on this choice.
+        Clean  — all-ages quotes (default).
+        Filthy — no-filter quotes. ADULTS ONLY.
+                 Has both sets: Settings →
+                 FILTHY: ON/OFF on the device.
+      They are separate firmware images
+      (…_filthy.uf2), and build/ holds only the
+      one built last.
+
   • Clean Build & Flash
       Changed the firmware source? Use this.
       Deletes build/, recompiles in Docker from
@@ -973,6 +1067,19 @@ def FlashTab(parent, app):
                                   "Flash (existing) → flash the last build without recompiling.")
             info.pack(anchor=tk.W, padx=8, pady=(6, 4))
 
+            # Quote edition: every deploy button below acts on the one picked
+            # here. Clean and Filthy are separate images with separate .uf2s.
+            erow = ttk.Frame(ff); erow.pack(fill=tk.X, padx=8, pady=(0, 4))
+            ttk.Label(erow, text="Edition:").pack(side=tk.LEFT)
+            self._edition_var = tk.StringVar(value=EDITIONS[DEFAULT_EDITION]["label"])
+            self._edition_cb = ttk.Combobox(
+                erow, textvariable=self._edition_var, state="readonly", width=22,
+                values=[e["label"] for e in EDITIONS.values()])
+            self._edition_cb.pack(side=tk.LEFT, padx=(6, 8))
+            self._edition_cb.bind("<<ComboboxSelected>>", self._on_edition)
+            self._edition_note = ttk.Label(erow, text="", foreground=FG_DIM)
+            self._edition_note.pack(side=tk.LEFT)
+
             self._uf2_lbl = ttk.Label(ff, text="", foreground=FG_DIM)
             self._uf2_lbl.pack(anchor=tk.W, padx=8)
 
@@ -1019,6 +1126,21 @@ def FlashTab(parent, app):
             state = tk.DISABLED if busy else tk.NORMAL
             for b in (self._build_btn, self._flash_btn, self._buildonly_btn):
                 self.after(0, lambda b=b, s=state: b.config(state=s))
+            # No switching editions mid-build (readonly = pickable, not typeable).
+            cb_state = tk.DISABLED if busy else "readonly"
+            self.after(0, lambda: self._edition_cb.config(state=cb_state))
+
+        def _edition(self):
+            """Key ("clean"/"filthy") of the edition picked in the combobox."""
+            label = self._edition_var.get()
+            for key, e in EDITIONS.items():
+                if e["label"] == label:
+                    return key
+            return DEFAULT_EDITION
+
+        def _on_edition(self, _evt=None):
+            self._custom_uf2 = None        # a browsed file no longer applies
+            self._refresh_status()
 
         def _refresh_status(self):
             pt = find_picotool()
@@ -1027,9 +1149,19 @@ def FlashTab(parent, app):
             else:
                 self._set(self._tool_lbl, "not found — click Install, or "
                           "install-deps.sh / your package manager", FG_YELLOW)
-            if UF2_PATH.exists():
-                kb = UF2_PATH.stat().st_size // 1024
-                self._set(self._uf2_lbl, f"existing build: {UF2_PATH}  ({kb} KB)", FG_GREEN)
+            ed = self._edition()
+            self._set(self._edition_note,
+                      "no-filter quotes — ADULTS ONLY" if ed == "filthy"
+                      else "the default all-ages quotes",
+                      FG_RED if ed == "filthy" else FG_DIM)
+            uf2 = uf2_path_for(ed)
+            other = built_edition()
+            if uf2.exists():
+                kb = uf2.stat().st_size // 1024
+                self._set(self._uf2_lbl, f"existing {ed.upper()} build: {uf2}  ({kb} KB)", FG_GREEN)
+            elif other:
+                self._set(self._uf2_lbl, f"build/ holds the {other.upper()} edition — use Clean "
+                          f"Build & Flash to make {ed.upper()}", FG_YELLOW)
             else:
                 self._set(self._uf2_lbl, "no existing build yet — use Clean Build & Flash", FG_YELLOW)
 
@@ -1090,9 +1222,12 @@ def FlashTab(parent, app):
         def _flash_existing(self):
             if self._busy:
                 return
-            uf2 = self._custom_uf2 or UF2_PATH
+            ed = self._edition()
+            uf2 = self._custom_uf2 or uf2_path_for(ed)
             if not Path(uf2).exists():
-                messagebox.showwarning("Flash", "No build found. Use Clean Build & Flash first.")
+                messagebox.showwarning(
+                    "Flash", f"No {ed.upper()} build found. Use Clean Build & Flash first "
+                             "(build/ only ever holds the edition built last).")
                 return
             self._set_busy(True)
             self._progress(0)
@@ -1111,12 +1246,14 @@ def FlashTab(parent, app):
         def _clean_build_flash(self):
             if self._busy:
                 return
+            ed = self._edition()
             self._set_busy(True); self._progress(0)
-            self._set(self._status, "building (Docker)…", FG_YELLOW)
+            self._set(self._status, f"building {ed.upper()} edition (Docker)…", FG_YELLOW)
             def _run():
                 try:
-                    clean_build_and_flash(self.app.log, self._progress)
-                    self.after(0, lambda: self._set(self._status, "Done — built and flashed", FG_GREEN))
+                    clean_build_and_flash(self.app.log, self._progress, ed)
+                    self.after(0, lambda: self._set(
+                        self._status, f"Done — {ed.upper()} edition built and flashed", FG_GREEN))
                     self.after(0, self._refresh_status)
                 except Exception as e:    # noqa: BLE001
                     self.app.log(f"[build] error: {e}")
@@ -1128,12 +1265,14 @@ def FlashTab(parent, app):
         def _build_only(self):
             if self._busy:
                 return
+            ed = self._edition()
             self._set_busy(True); self._progress(0)
-            self._set(self._status, "building (Docker)…", FG_YELLOW)
+            self._set(self._status, f"building {ed.upper()} edition (Docker)…", FG_YELLOW)
             def _run():
                 try:
-                    docker_build(self.app.log, self._progress)
-                    self.after(0, lambda: self._set(self._status, "Build complete (not flashed)", FG_GREEN))
+                    docker_build(self.app.log, self._progress, ed)
+                    self.after(0, lambda: self._set(
+                        self._status, f"{ed.upper()} build complete (not flashed)", FG_GREEN))
                     self.after(0, self._refresh_status)
                 except Exception as e:    # noqa: BLE001
                     self.app.log(f"[build] error: {e}")

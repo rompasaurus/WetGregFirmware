@@ -147,6 +147,27 @@ Quick picotool actions against the connected board:
 
 ## 4.3 Deploy firmware
 
+**Edition** — pick which Greg you are deploying before you press anything; every
+button below acts on that choice.
+
+| Edition | Quote table | Output | Who it's for |
+|---|---|---|---|
+| **Clean** (default) | `quotes.h` | `wetgreg_hub_rtos.uf2` | Everyone — the all-ages Greg. |
+| **Filthy** | `quotes.h` + `quotes_filthy.h` | `wetgreg_hub_rtos_filthy.uf2` | Adults only — swearing, sex jokes, no filter. Carries both sets, with an on-device toggle. |
+
+They are two separate firmware images (the build passes `GREG_EDITION` to CMake,
+which adds the filthy quote table and renames the output), so a Filthy build can't be
+flashed by accident from the Clean selection or vice versa. A clean build wipes
+`build/`, so only the edition built last is on disk — switch editions and
+**Flash (existing build)** will tell you to rebuild.
+
+On a Filthy Greg, **Menu → Settings → FILTHY: ON/OFF** (CENTER toggles, saved
+across reboots, ON out of the box) switches between the filthy and the clean
+English quotes. The Clean edition has no such row and no filthy text in its
+image at all. The Arabic quote set is the same all-ages table in both editions,
+so the row reads `FILTHY: ENGLISH ONLY` while Greg is set to Arabic. The boot banner on the serial monitor
+shows which edition is running (`… | 636 quotes (FILTHY) | …`).
+
 The three buttons that get firmware onto the board:
 
 - **Clean Build & Flash** — the headline action. Steps:
@@ -234,6 +255,8 @@ python3 tools/devtool/devtool.py flash         # flash the existing build
 python3 tools/devtool/devtool.py flash fw.uf2  # flash a specific .uf2
 python3 tools/devtool/devtool.py build         # clean Docker build only
 python3 tools/devtool/devtool.py build-flash   # clean build, then flash
+python3 tools/devtool/devtool.py build-flash --edition filthy   # adults-only quotes
+python3 tools/devtool/devtool.py flash --edition filthy         # flash an existing filthy build
 python3 tools/devtool/devtool.py reboot        # reboot the Pico into BOOTSEL
 python3 tools/devtool/devtool.py erase         # full chip erase (recovery)
 python3 tools/devtool/devtool.py deps          # check the toolchain

@@ -108,6 +108,7 @@ void saved_seed_defaults(void) {
     g_saved.wifi_mode       = WIFI_MODE_SYNC_ONLY;
     g_saved.last_ssid[0]    = '\0';
     g_saved.language        = LANG_EN;
+    g_saved.filthy_quotes   = 1;      /* FILTHY edition ships filthy; ignored by the clean build */
 }
 
 void saved_load(void) {
@@ -132,6 +133,7 @@ void saved_load(void) {
     if ((uint8_t)g_saved.last_ssid[0] == 0xFF) g_saved.last_ssid[0] = '\0';
     g_saved.last_ssid[sizeof(g_saved.last_ssid) - 1] = '\0';
     if (g_saved.language >= LANG_COUNT) g_saved.language = LANG_EN;   /* 0xFF on old images */
+    if (g_saved.filthy_quotes > 1) g_saved.filthy_quotes = 1;         /* 0xFF on old images → ON */
 
     /* Assign a persistent social id on first ever boot (and defend against a
      * zeroed/sanitised field). rng is already seeded before the scheduler. */
@@ -251,6 +253,13 @@ void language_store(uint8_t lang) {
     if (lang >= LANG_COUNT) lang = LANG_EN;
     if (g_saved.language == lang) return;
     g_saved.language = lang;
+    saved_write_flash();
+}
+
+void filthy_store(uint8_t on) {
+    on = on ? 1 : 0;
+    if (g_saved.filthy_quotes == on) return;
+    g_saved.filthy_quotes = on;
     saved_write_flash();
 }
 
