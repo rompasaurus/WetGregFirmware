@@ -51,6 +51,8 @@ extern uint32_t step_count;
 extern float    step_threshold;         /* g — adjustable (Motion menu) */
 extern uint32_t steps_today;
 extern uint32_t active_seconds_today;
+int8_t motion_activity_day(void);                 /* RTC day the tallies belong to (-1 none) */
+void   motion_restore_day(uint32_t steps, uint32_t active_s, int8_t day);   /* deep-nap wake */
 
 /* ── Pocket / not-viewed detection → freeze e-ink redraws to save power ── */
 extern bool     g_screen_idle;          /* HK-owned redraw-freeze flag */

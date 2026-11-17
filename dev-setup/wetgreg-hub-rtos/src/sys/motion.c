@@ -71,6 +71,19 @@ static int8_t   activity_day    = -1;   /* RTC day the tally belongs to */
 static uint32_t last_step_total = 0;    /* step_count snapshot for the delta */
 static uint32_t active_accum_ms = 0;
 
+int8_t motion_activity_day(void) { return activity_day; }
+
+/* Deep-nap wake: the tallies were carried through the power-down. Adopt them
+ * only for the day they belong to — activity_update() zeroes them itself the
+ * moment the RTC says the date has moved on. */
+void motion_restore_day(uint32_t steps, uint32_t active_s, int8_t day) {
+    steps_today          = steps;
+    active_seconds_today = active_s;
+    activity_day         = day;
+    last_step_total      = step_count;
+    active_accum_ms      = 0;
+}
+
 static void activity_update(uint32_t dt_ms) {
     datetime_t t; rtc_get_datetime(&t);
     if (t.day != activity_day) {         /* new day → reset */

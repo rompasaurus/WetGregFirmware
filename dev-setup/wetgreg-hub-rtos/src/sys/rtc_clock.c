@@ -22,9 +22,10 @@
 #include <string.h>
 
 #include "rtc_compat.h"
+#include "power.h"                     /* g_boot_kind, power_debug_cmd */
 
 #if !PICO_RP2040
-#include "hardware/structs/powman.h"   /* powman_hw->chip_reset: why we booted */
+#include "hardware/powman.h"           /* chip_reset (why we booted) + the always-on timer */
 #endif
 
 const char *const month_names[12] = {
@@ -67,6 +68,22 @@ static int64_t now_epoch_us(void) {
 void clock_checkpoint(void) {
     g_ckpt.epoch_us = now_epoch_us();
     g_ckpt.sum      = ckpt_sum(&g_ckpt);
+}
+
+uint32_t clock_epoch_s(void) {
+    return (uint32_t)(now_epoch_us() / 1000000LL);
+}
+
+/* ─── The clock through a deep nap ───────────────────────────────────────────
+ * The deep nap powers the switched core off, so the microsecond timer AND the
+ * RAM checkpoint above are both gone when Greg wakes. The POWMAN timer lives
+ * in the always-on domain and keeps counting (off the factory-calibrated
+ * low-power oscillator — good to a fraction of a percent, i.e. a minute or
+ * two over a night; the next NTP sync or TIME push trims it). */
+void clock_aon_save(void) {
+    powman_timer_set_1khz_tick_source_xosc();
+    powman_timer_set_ms((uint64_t)(now_epoch_us() / 1000LL));
+    powman_timer_start();
 }
 
 /* Decode the HAD_* bits of powman CHIP_RESET into a short label list. */
@@ -140,13 +157,23 @@ void init_rtc_from_compile_time(void) {
         g_ckpt.magic = CKPT_MAGIC;
         g_ckpt.boots = 0;
     }
+    /* Woken from a deep nap: the always-on timer carried the wall clock. */
+    const char *src = g_restored ? "restored from checkpoint:" : "set to build time:";
+    if ((g_boot_kind == BOOT_NAP_WAKE || g_boot_kind == BOOT_NAP_PEEK) && powman_timer_is_running()) {
+        int64_t aon_us = (int64_t)powman_timer_get_ms() * 1000LL;
+        if (aon_us > build_us && aon_us < far_us) {
+            _sw_rtc_offset_us = aon_us - (int64_t)time_us_64();
+            g_restored = true;
+            src = "carried through the nap:";
+        }
+    }
     clock_checkpoint();
 
     char why[96];
     reset_reason_str(g_reset_flags, why, sizeof(why));
     rtc_get_datetime(&dt);
     printf("RTC %s %04d-%02d-%02d %02d:%02d:%02d | reset: %s (0x%08lx) | warm boots: %lu\n",
-           g_restored ? "restored from checkpoint:" : "set to build time:",
+           src,
            dt.year, dt.month, dt.day, dt.hour, dt.min, dt.sec,
            why, (unsigned long)g_reset_flags, (unsigned long)g_ckpt.boots);
 #else
@@ -209,6 +236,8 @@ void clock_serial_poll(void) {
                        dt.year, dt.month, dt.day, dt.hour, dt.min, dt.sec);
             } else if (line[0] == 'T' && line[1] == 'I') {
                 printf("TIME ERR (want: TIME YYYY-MM-DD HH:MM:SS, or TIME?)\n");
+            } else {
+                (void)power_debug_cmd(line);   /* PWR? / KEY x / NAP — bench commands */
             }
         } else if (len < (int)sizeof(line) - 1) {
             line[len++] = (char)c;

@@ -22,6 +22,7 @@
 #define WIFI_SYNC_LINGER_MANUAL_MS  (90u * 1000u)          /* menu join: give the status screen a look */
 #define WIFI_SYNC_GIVEUP_MS         (120u * 1000u)         /* no NTP reply in 2 min → drop, retry later */
 #define WIFI_SYNC_PERIOD_MS         (24u * 3600u * 1000u)  /* daily */
+#define WIFI_SYNC_NAP_PERIOD_MS     (12u * 3600u * 1000u)  /* after a deep-nap wake: resync once this stale */
 #define WIFI_SYNC_RETRY_MS          (2u * 3600u * 1000u)   /* after a failed attempt */
 #define WIFI_SYNC_BOOT_DELAY_MS     (20u * 1000u)          /* let the splash finish first */
 
@@ -289,15 +290,29 @@ void wifi_rejoin_tick(void) {
 
 /* ─── WiFi power policy ─── */
 
-void wifi_policy_boot(void) {
-    if (!g_saved.last_ssid[0]) return;           /* never joined anything — nothing to sync against */
+void wifi_policy_boot(uint32_t last_sync_age_s) {
     uint32_t now = now_ms();
+    /* Waking from a deep nap is a boot, and Greg naps many times a day — a
+     * WiFi join on every one of them would cost more than the nap saved. The
+     * age of the last sync rides through the nap, so carry on from it: resync
+     * only once it is WIFI_SYNC_NAP_PERIOD_MS old (the nap clock runs off the
+     * low-power oscillator, hence sooner than the awake 24 h). */
+    bool known = last_sync_age_s < 48u * 3600u;
+    if (known) {
+        g_last_sync_ms = now - last_sync_age_s * 1000u;      /* ms-since-boot, wraps on purpose */
+        if (!g_last_sync_ms) g_last_sync_ms = 1;
+    }
+    if (!g_saved.last_ssid[0]) return;           /* never joined anything — nothing to sync against */
     if (g_saved.wifi_mode == WIFI_MODE_ALWAYS) {
         /* The user asked for the link to stay up: bring it up in the
          * background once the splash is done (never blocks boot). */
         wifi_schedule_rejoin(g_saved.last_ssid, WIFI_SYNC_BOOT_DELAY_MS);
     } else {
-        g_next_autosync_ms = (now + WIFI_SYNC_BOOT_DELAY_MS) ? (now + WIFI_SYNC_BOOT_DELAY_MS) : 1;
+        uint32_t wait = WIFI_SYNC_BOOT_DELAY_MS;
+        uint32_t age_ms = last_sync_age_s * 1000u;
+        if (known && age_ms < WIFI_SYNC_NAP_PERIOD_MS && WIFI_SYNC_NAP_PERIOD_MS - age_ms > wait)
+            wait = WIFI_SYNC_NAP_PERIOD_MS - age_ms;
+        g_next_autosync_ms = (now + wait) ? (now + wait) : 1;
     }
 }
 

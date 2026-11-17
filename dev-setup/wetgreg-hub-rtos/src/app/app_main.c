@@ -97,7 +97,7 @@
 #define STATE_ANIM_MENU       24  /* Animations submenu (intro, future animations) */
 #define STATE_SETTINGS        25  /* Settings submenu (network/bt/display/reset) */
 #define STATE_RESET_CONFIRM   26  /* factory reset confirmation card */
-#define STATE_SLEEP           27  /* pseudo-off: Greg asleep, radios off, underclocked */
+#define STATE_SLEEP           27  /* nap: sleep still; core powered off on battery, light nap on USB */
 
 /* Bluetooth is OFF by default to save power; toggled on in the Bluetooth screen. */
 static bool bt_enabled = false;
@@ -108,6 +108,10 @@ static bool bt_enabled = false;
  * reliable way to find a flat battery in the morning. The password keyboard
  * gets 3× the allowance. */
 #define UI_IDLE_RETURN_MS   90000u
+
+/* No press for this long while the octopus screen is up = nobody is looking;
+ * Greg is only awake because he is being carried (see STATE_OCTOPUS). */
+#define UNATTENDED_MS       180000u
 #define UI_IDLE_NEARBY_MS   120000u   /* SCAN NEARBY runs the radio at 50 % duty */
 
 /* Critical-battery hold: Greg wakes on CENTER so the "CHARGE ME" still can be
@@ -182,13 +186,21 @@ static TaskHandle_t g_app_task = NULL;
 #define APP_TASK_PRIO         (tskIDLE_PRIORITY + 2)
 
 int main(void) {
+    /* FIRST: drop to the 48 MHz operating point (everything initialised below
+     * sizes its baud rates / tick from the clock it finds) and work out how we
+     * got here. A deep-nap USB peek that finds no USB powers straight back
+     * down inside this call and never reaches the next line. */
+    power_boot_begin();
+
     stdio_init_all();
     sleep_ms(50);   /* brief settle; was 1000ms of pure boot delay for USB serial */
+    if (BOOT_LOG_DELAY_MS) sleep_ms(BOOT_LOG_DELAY_MS);   /* bench: let a serial monitor attach */
     printf("WETGREG HUB v%s (%s) | display: %s | %d quotes (%s) | built %s %s\n",
            WETGREG_VERSION, WETGREG_VERSION_DATE, DISPLAY_NAME, QUOTE_COUNT, QUOTE_EDITION,
            __DATE__, __TIME__);
 
     init_rtc_from_compile_time();
+    power_boot_report();
 
     if (DEV_Module_Init() != 0) {
         printf("ERROR: Hardware init failed.\n");
@@ -209,10 +221,16 @@ int main(void) {
     }
 #endif
 
-    /* Startup chime */
-    speaker_tone(1000, 80); sleep_ms(30);
-    speaker_tone(1500, 80); sleep_ms(30);
-    speaker_tone(2000, 120);
+    /* Startup chime — or, coming out of a deep nap, the same rising "good
+     * morning" the light nap plays. The quiet USB-peek boot makes no sound:
+     * Greg is still asleep. */
+    if (g_boot_kind == BOOT_COLD) {
+        speaker_tone(1000, 80); sleep_ms(30);
+        speaker_tone(1500, 80); sleep_ms(30);
+        speaker_tone(2000, 120);
+    } else if (g_boot_kind == BOOT_NAP_WAKE) {
+        speaker_tone(784, 60); speaker_tone(1047, 60); speaker_tone(1319, 100);
+    }
 
     /* NOTE: EPD_Init()/EPD_Clear() are NOT called here. The e-ink panel is
      * owned exclusively by the Display task (core 1), which initialises it in
@@ -248,6 +266,7 @@ static void app_task(void *param) {
     /* Init CYW43 early — even without WiFi, the chip's SPI CS shares
        GPIO 29 (ADC3/VSYS sense) and will hold it low if uninitialised. Under the
        FreeRTOS cyw43 arch this also starts the networking background task. */
+    BOOT_TRACE("app: cyw43_arch_init");
     if (cyw43_arch_init()) {
         printf("WARNING: CYW43 init failed — battery reads may be 0\n");
     }
@@ -256,8 +275,10 @@ static void app_task(void *param) {
        MoopsterCell), so connecting from the Network menu needs no password
        entry. The clock NTP-syncs whenever WiFi is connected. */
 
+    BOOT_TRACE("app: battery_init + mpu_init");
     battery_init();
     mpu_init();
+    BOOT_TRACE("app: rtos_tasks_start");
 
     /* ═══ Phase 2: spin up the Input, Display, and Housekeeping tasks ═══
      * From here on THIS task is the UI task: it renders, runs the state machine,
@@ -269,13 +290,34 @@ static void app_task(void *param) {
     /* Wait (explicit handshake, not a timing guess) for the Display task on core 1
      * to register with the flash lockout before saved_load() — which may write
      * flash on first boot — so that write is SMP-safe (core 1 parked, no XIP fault). */
+    BOOT_TRACE("app: wait flash ready");
     rtos_wait_flash_ready();
-    saved_load();   /* load cached WiFi networks (seeds Moop Ship + MoopsterCell) */
-    wifi_policy_boot();   /* arm the background time sync (never blocks boot) */
+    BOOT_TRACE("app: saved_load");
+    saved_load();
+    BOOT_TRACE("app: saved_load done");   /* load cached WiFi networks (seeds Moop Ship + MoopsterCell) */
 
-    /* Social: bake our id into the beacon, and resume scanning if it was left on. */
+    /* Waking from a deep nap is a boot: put back what rode through it in the
+     * POWMAN scratch registers — today's steps, the mood filter, and how stale
+     * the clock sync is (so a nap wake does not mean a WiFi join). */
+    uint32_t sync_age_s = UINT32_MAX;
+    if (g_nap_resume.valid) {
+        motion_restore_day(g_nap_resume.steps_today, g_nap_resume.active_seconds, g_nap_resume.day);
+        if (g_nap_resume.mood >= -1 && g_nap_resume.mood < MOOD_COUNT)
+            current_mood = g_nap_resume.mood;
+        uint32_t now_s = clock_epoch_s();
+        if (g_nap_resume.wifi_sync_s && now_s >= g_nap_resume.wifi_sync_s)
+            sync_age_s = now_s - g_nap_resume.wifi_sync_s;
+    }
+    wifi_policy_boot(sync_age_s);   /* arm the background time sync (never blocks boot) */
+
+    /* Social: bake our id into the beacon, and resume scanning if it was left on.
+     * Not on the quiet USB-peek boot — Greg is still napping, radios stay off
+     * until CENTER (power_sleep_exit restarts them). */
     wetgreg_social_set_self(g_saved.wetgreg_id);
-    if (g_saved.social_on) {
+    if (g_boot_kind == BOOT_NAP_PEEK) {
+        power_nap_adopt(g_saved.social_on);
+        bt_enabled = g_saved.social_on;
+    } else if (g_saved.social_on) {
         if (!wetgreg_bt_active()) wetgreg_bt_init();
         bt_enabled = true;
         wetgreg_social_set_self(g_saved.wetgreg_id);   /* re-push now that BT is up */
@@ -283,7 +325,14 @@ static void app_task(void *param) {
     }
 
     /* ─── State machine ─── */
-    uint8_t state = STATE_SPLASH;      /* one-shot boot splash, then STATE_OCTOPUS */
+    BOOT_TRACE("app: radios/social set up, entering UI loop");
+    /* Cold boot: the one-shot splash, then the octopus. Out of a deep nap:
+     * straight to the octopus (CENTER wake) or straight back into the nap
+     * (the quiet USB-peek boot — power_nap_adopt already set g_power_sleep). */
+    uint8_t state = g_boot_kind == BOOT_COLD       ? STATE_SPLASH
+                  : g_boot_kind == BOOT_NAP_PEEK ? STATE_SLEEP
+                                                   : STATE_OCTOPUS;   /* nap wake / warm restart */
+    if (state == STATE_OCTOPUS) wake_screen();
     uint32_t splash_t0 = 0;            /* 0 = splash not started yet */
     uint32_t intro_t0  = 0;            /* 0 = intro not started (re-armed on exit) */
     uint32_t frame_idx = 0;
@@ -377,7 +426,15 @@ static void app_task(void *param) {
             const uint8_t *cycle = mood_cycle(q->mood);
             uint8_t expr = cycle[frame_idx % 4];
 
-            if (expr == EXPR_OPEN && frame_idx > 0)
+            /* UNATTENDED: awake only because the accelerometer says Greg is
+             * being carried — nobody has pressed anything for UNATTENDED_MS.
+             * In a pocket every panel refresh is wasted, so draw a quarter as
+             * often: one frame per quote instead of the four-frame mouth
+             * animation. The quote still changes every ~12 s, and any press
+             * brings the animation straight back. */
+            bool unattended = ui_idle_for(UNATTENDED_MS);
+
+            if ((expr == EXPR_OPEN || unattended) && frame_idx > 0)
                 qi = pick_quote();
 
             /* Skip the redraw entirely while pocketed/idle — the e-ink keeps
@@ -425,7 +482,7 @@ static void app_task(void *param) {
              * from VBUS while USB is present (D3 is reverse-biased), so the
              * display never competed with the charger — the TP4056 charges at
              * its full programmed current regardless of what Greg is doing. */
-            const int octo_ticks = 200;
+            const int octo_ticks = unattended ? 800 : 200;
             for (int i = 0; i < octo_ticks && state == STATE_OCTOPUS; i++) {
                 uint8_t inp;
                 bool got = ui_get_input(&inp, 15);     /* ~15 ms tick; sleeps efficiently */
@@ -460,6 +517,12 @@ static void app_task(void *param) {
                     state = STATE_SLEEP;
                     break;
                 }
+                if (power_take_nap_request()) {        /* serial bench command "NAP" */
+                    state = STATE_SLEEP;
+                    break;
+                }
+                if (power_take_restart_request())      /* radio chip hung: re-init everything */
+                    power_warm_restart(current_mood);  /* never returns */
                 wifi_rejoin_tick();                    /* deferred post-wake wifi rejoin */
                 wifi_policy_tick();                    /* sync-only drop / daily background sync */
                 if (wetgreg_bt_active() && wetgreg_bt_take_command() >= 0) {
@@ -538,15 +601,24 @@ static void app_task(void *param) {
                 display_render();
                 /* Descending "nighty night" chime while still at full clock. */
                 speaker_tone(988, 70); speaker_tone(784, 70); speaker_tone(523, 110);
-                power_sleep_enter();
+                /* On battery this does not return: the switched core is powered
+                 * off and CENTER boots Greg straight back to the octopus. On
+                 * USB it is the light nap, and we carry on below. */
+                power_sleep_enter(current_mood);
                 uint8_t drain;                       /* eat any leftover mashing so */
                 while (ui_get_input(&drain, 0)) { }  /* a 6th tap can't insta-wake  */
             }
-            /* Doze. ONLY CENTER wakes him — motion, other keys, phone pokes and
-             * social sightings are all ignored (the radios are off anyway). */
+            /* Light nap (USB). ONLY CENTER wakes him — motion, other keys, phone
+             * pokes and social sightings are all ignored (the radios are off
+             * anyway). Unplugged? Then go down properly once the gauge has had
+             * its post-unplug window. */
             uint8_t inp;
-            if (ui_get_input(&inp, 60000) && inp == INPUT_CENTER) {
+            bool woke = ui_get_input(&inp, power_nap_poll_ms()) && inp == INPUT_CENTER;
+            if (!woke && power_nap_should_deepen())
+                power_deep_nap_enter(current_mood);  /* never returns */
+            if (woke) {
                 power_sleep_exit();
+                bt_enabled = bt_enabled || wetgreg_bt_active();
                 speaker_tone(784, 60); speaker_tone(1047, 60); speaker_tone(1319, 100);
                 qi = pick_quote();
                 frame_idx = 0;

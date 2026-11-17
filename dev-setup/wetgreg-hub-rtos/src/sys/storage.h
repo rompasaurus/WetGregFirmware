@@ -56,7 +56,12 @@ typedef struct {
      * the FILTHY edition has the table and the Settings row; the all-ages
      * build keeps the byte for layout but never reads it. ── */
     uint8_t      filthy_quotes;        /* 1 = filthy table (default), 0 = clean table */
+    /* ── Which firmware load the stored battery offset was calibrated under
+     * (appended; 0xFF on old images → migrated once, see saved_load). ── */
+    uint8_t      batt_model;           /* BATT_MODEL_48MHZ once the offset matches the 48 MHz draw */
 } saved_store_t;
+
+#define BATT_MODEL_48MHZ 2             /* 1 / 0xFF = calibrated when Greg idled at 150 MHz */
 
 #define WIFI_MODE_SYNC_ONLY 0          /* join → NTP → drop (and once a day in the background) */
 #define WIFI_MODE_ALWAYS    1          /* stay associated (PM1 power-save) until told otherwise */

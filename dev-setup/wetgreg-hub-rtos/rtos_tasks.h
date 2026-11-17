@@ -162,6 +162,7 @@ void rtos_display_cmd(int cmd);
  * true and sets *code (an INPUT_* value) on an event; false on timeout. This
  * replaces the old busy-poll: the UI sleeps efficiently instead of spinning. */
 bool ui_get_input(uint8_t *code, uint32_t timeout_ms);
+void rtos_inject_input(uint8_t code);   /* bench: queue a press as if the Input task saw it */
 
 /* True when no press has been consumed for `ms` — sub-screens use it to fall
  * back to the octopus screen instead of re-rendering a menu forever. */
@@ -184,6 +185,7 @@ void    hk_sample(void);                 /* sample accel/orientation/steps + pub
 void    batt_sample(void);               /* sample battery/USB via the cyw43-locked ADC (Battery task) */
 uint8_t read_joystick(void);             /* read+rotate joystick -> INPUT_* (Input task; already in main.c) */
 void    display_init_panel(void);        /* EPD_Init + EPD_Clear (Display task prologue) */
+void    display_park_panel(void);        /* quiet peek boot: leave the image, deep-sleep the controller */
 void    display_blit(int buf_idx);       /* EPD_Partial(display_buf[idx]) (Display task) */
 void    display_panel_cmd(int cmd);      /* EPD deep-sleep / re-init (Display task; DISP_CMD_*) */
 void    display_grab_into(int buf_idx);  /* copy ui_buf -> display_buf[idx] (UI side) */

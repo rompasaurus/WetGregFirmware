@@ -60,15 +60,21 @@
 #endif
 
 /* Default additive offset (mV) added to the VSYS reading on battery: the D3
- * drop at the quiet baseline plus this board's ADC-path error. 530 mV is the
- * value MEASURED on the WetGreg PCB (a full 4.20 V cell read 3.67 V). The
- * idle-hook WFI lowers the baseline current and so the real drop a little,
- * which makes this slightly optimistic — the auto/manual anchor converges it
- * per board; it is only the starting point. (An estimate of 460 mV was tried
- * and read a low cell as 0 bars, so stay with the measured number.) */
+ * drop at the quiet baseline plus this board's ADC-path error.
+ *
+ * 530 mV was MEASURED on the WetGreg PCB (a full 4.20 V cell read 3.67 V) when
+ * the firmware idled at 150 MHz, roughly 25-30 mA. At the 48 MHz operating
+ * point (power.h, AWAKE_CLK_48MHZ) the idle draw is around a third of that,
+ * and a BAT54 drops ~70 mV less per decade of current plus ~3 ohm of series
+ * resistance: (0.5 decade x 70 mV) + (18 mA x 3 ohm) = ~90 mV less. Hence 450.
+ * This is an ESTIMATE until a board is put on a meter — it is only the
+ * starting point; the auto/manual anchor converges the real value per board.
+ * BATT_OFFSET_CLOCK_SHIFT_MV is the same step, applied once (storage.c) to an
+ * offset that was anchored under the old 150 MHz firmware. */
 #ifndef BATT_OFFSET_DEFAULT_MV
-#define BATT_OFFSET_DEFAULT_MV 530
+#define BATT_OFFSET_DEFAULT_MV 450
 #endif
+#define BATT_OFFSET_CLOCK_SHIFT_MV 80
 #define BATT_OFFSET_MIN_MV 150          /* sanity clamps for the stored offset */
 #define BATT_OFFSET_MAX_MV 900
 
@@ -76,8 +82,20 @@
  * cell is pinned at the 4.20 V float; it relaxes ~10–30 mV in the first minutes. */
 #define BATT_ANCHOR_TARGET_V 4.19f
 
-/* VSYS at/above this can only be the USB path (cell ≤ 4.20 V minus a diode). */
-#define BATT_USB_VSYS_THRESHOLD_V 4.45f
+/* USB presence is read off VSYS itself — NOT off the CYW43's VBUS pin.
+ *
+ * On battery VSYS is the cell minus D3: a full 4.20 V cell reads ~3.7-3.9 V
+ * and nothing can lift it higher. On USB it is VBUS minus the Pico's own
+ * Schottky: 4.4-4.7 V. So VSYS >= 4.10 V means USB (4.00 V to drop back out).
+ *
+ * Asking the radio chip instead costs an ioctl per sample, which (a) wakes the
+ * chip's bus twice a second so it never idles, and (b) is catastrophic when
+ * the chip stops answering: the driver busy-waits a full SECOND per ioctl
+ * with the radio lock held ("[CYW43] STALL ... timeout"), which turned a
+ * 2 Hz battery sample into a core spinning flat out — seen in the field on a
+ * unit up 20 h — while USB was reported as "battery" the whole time. */
+#define BATT_USB_VSYS_ON_V   4.10f
+#define BATT_USB_VSYS_OFF_V  4.00f
 
 /* Persisted per-board offset, mV (loaded by saved_load → battery_set_offset_mv). */
 extern uint16_t g_batt_offset_mv;
@@ -92,8 +110,15 @@ void  battery_init(void);
  * from VSYS instead of the CYW43's VBUS GPIO. Default: up. */
 void  battery_set_cyw43_up(bool up);
 
+/* A VSYS reading below this is not a battery or a USB rail, it is a failed
+ * read (radio asleep / pin contention): ignore it. The Pico's regulator cannot
+ * even run from less. */
+#define BATT_RAW_VALID_MIN_V 2.50f
+
 float read_vsys_raw_volts(void);   /* what the ADC sees: VSYS (or the direct cell) — NO offset */
-bool  is_usb_powered(void);        /* CYW43 VBUS pin when available, else VSYS ≥ 4.45 V */
+int   battery_radio_fail_count(void);   /* consecutive reads whose radio ioctl failed (0 = healthy) */
+bool  battery_usb_from_raw(float raw_v);   /* USB verdict for a VSYS reading (with hysteresis) */
+bool  is_usb_powered(void);        /* fresh read + verdict (direct-sense builds ask the CYW43) */
 
 /* Raw → estimated resting cell volts (adds the offset on the VSYS path). */
 float battery_cell_from_raw(float raw_v);

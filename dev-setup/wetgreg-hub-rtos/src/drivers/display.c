@@ -114,6 +114,25 @@ bool display_frame_unchanged(void) {
 void display_invalidate_last(void)  { last_sent_valid = false; }
 void display_blit(int idx)        { EPD_Partial(display_buf[idx]); }
 void display_init_panel(void)     { EPD_Init(); EPD_Clear(); }
+
+/* Quiet deep-nap peek boot: the glass keeps showing the sleep still and must
+ * not be redrawn, but the pin init at boot left RST low (panel held in reset).
+ * Release it and put the controller back into its ~1 uA deep sleep. */
+/* Same, straight after a reset with nothing initialised (deep-nap power-down
+ * path): bring up just the panel pins + SPI first. No stdio, no scheduler. */
+void DEV_GPIO_Init(void);   /* lib/Config/DEV_Config.c — not in its header */
+
+void display_park_cold(void) {
+    DEV_GPIO_Init();
+    DEV_SPI_Init();
+    display_park_panel();
+}
+
+void display_park_panel(void) {
+    DEV_Digital_Write(EPD_RST_PIN, 1);
+    DEV_Delay_ms(20);
+    EPD_Sleep();
+}
 void display_panel_cmd(int cmd) {
     /* STATE_SLEEP power path. Deep sleep retains the image at ~zero panel
      * power; waking needs the full hardware-reset + init + clear (the same

@@ -100,6 +100,12 @@ void mpu_init(void) {
     printf("[ACCEL] SC7A20 initialized OK at 0x%02X\n", mpu_addr);
 }
 
+void mpu_power_down(void) {
+    /* CTRL_REG1 = 0: ODR off = power-down mode (~0.5 uA). mpu_init() brings it
+     * back on the next boot. Used right before the deep nap cuts core power. */
+    if (mpu_ok) mpu_write_reg(SC_CTRL_REG1, 0x00);
+}
+
 void mpu_read_all(void) {
     if (!mpu_ok) return;
 

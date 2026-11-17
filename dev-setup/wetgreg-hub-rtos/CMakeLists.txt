@@ -154,7 +154,10 @@ target_link_libraries(wetgreg_hub_rtos
     hardware_i2c           # accelerometer
     hardware_flash         # low-level flash erase/program
     hardware_watchdog      # watchdog_reboot — hold-CENTER hard reboot
-    hardware_vreg          # vreg_set_voltage — core-rail drop in the sleep state
+    hardware_vreg          # vreg_set_voltage — restore the default core rail at boot
+    hardware_powman        # deep nap: switched-core power-down, wake sources, always-on timer
+    pico_low_power         # linked for its runtime init only: the RP2350 sleep fix after a
+                           # watchdog/ROM reboot, without which the P-state power-down never happens
     pico_flash             # flash_safe_execute() — multicore-safe flash writes
     m                      # libm (sqrtf/atan2f for the accelerometer maths)
 
@@ -176,15 +179,46 @@ target_link_libraries(wetgreg_hub_rtos pico_btstack_ble pico_btstack_cyw43)
 pico_btstack_make_gatt_header(wetgreg_hub_rtos PRIVATE ${CMAKE_CURRENT_LIST_DIR}/wetgreg.gatt)
 
 # --- Power / battery build options (see src/sys/power.h, src/drivers/battery.h) ---
-#   -DSLEEP_CYW43_OFF=ON          power the CYW43 down completely while asleep
-#                                 (bench-test with serial attached first)
+#   -DAWAKE_CLK_48MHZ=OFF         run at the board default 150 MHz instead of 48 MHz
+#   -DDEEP_NAP=ON                 nap by powering the RP2350's switched core off (~0.2 mA).
+#                                 Off by default until fully bench-verified - see power.h
+#   -DDEEP_NAP_PEEK_S=600         how often a deep-napping Greg checks for USB
 #   -DBATT_DIRECT_ADC_GPIO=26     read the cell through a direct 1M/1M divider on
 #                                 that ADC-capable GPIO instead of VSYS behind D3
 #   -DBATT_DIRECT_DIVIDER=2.0     divider ratio for the direct path (default 2.0)
-#   -DBATT_OFFSET_DEFAULT_MV=460  starting VSYS->cell offset before auto-anchoring
-option(SLEEP_CYW43_OFF "Power the CYW43 down completely in the sleep state" OFF)
-if(SLEEP_CYW43_OFF)
-    target_compile_definitions(wetgreg_hub_rtos PRIVATE SLEEP_CYW43_OFF=1)
+#   -DBATT_OFFSET_DEFAULT_MV=450  starting VSYS->cell offset before auto-anchoring
+option(AWAKE_CLK_48MHZ "Run at 48 MHz instead of 150 MHz" ON)
+if(DEFINED ENV{DEEP_NAP} AND NOT "$ENV{DEEP_NAP}" STREQUAL "")
+    set(DEEP_NAP "$ENV{DEEP_NAP}" CACHE BOOL "" FORCE)   # Docker bench builds: -e DEEP_NAP=1
+endif()
+option(DEEP_NAP "Power the switched core off in the nap (bench-verified; multi-day battery run outstanding)" OFF)
+if(NOT AWAKE_CLK_48MHZ)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE AWAKE_CLK_48MHZ=0)
+else()
+    # The radio's PIO SPI program must match the CPU speed. The SDK default
+    # (spi_gap01_sample0) is "for high cpu speed" and does NOT work at 48 MHz:
+    # the chip fails to start ("[CYW43] Failed to start CYW43", bench
+    # 2026-11-16). spi_gap0_sample1 is the SDK's variant "for lower cpu speed".
+    # (The old firmware napped at 48 MHz on the high-speed program with the
+    # chip still live — the likely origin of the field "STALL" hangs.)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE CYW43_SPI_PROGRAM_NAME=spi_gap0_sample1)
+endif()
+if(DEEP_NAP)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE DEEP_NAP=1)
+endif()
+# Bench builds: -DBOOT_TRACE=1 / -DBOOT_LOG_DELAY_MS=5000 / -DDEEP_NAP=1 (also taken from the
+# environment so the Docker build can set them with `docker compose run -e`).
+foreach(opt BOOT_TRACE BOOT_LOG_DELAY_MS)
+    if(NOT DEFINED ${opt} AND DEFINED ENV{${opt}})
+        set(${opt} "$ENV{${opt}}")
+    endif()
+    if(DEFINED ${opt} AND NOT "${${opt}}" STREQUAL "")
+        target_compile_definitions(wetgreg_hub_rtos PRIVATE ${opt}=${${opt}})
+        message(STATUS "Bench option: ${opt}=${${opt}}")
+    endif()
+endforeach()
+if(DEFINED DEEP_NAP_PEEK_S)
+    target_compile_definitions(wetgreg_hub_rtos PRIVATE DEEP_NAP_PEEK_S=${DEEP_NAP_PEEK_S}u)
 endif()
 foreach(opt BATT_DIRECT_ADC_GPIO BATT_DIRECT_DIVIDER BATT_OFFSET_DEFAULT_MV)
     if(DEFINED ${opt})

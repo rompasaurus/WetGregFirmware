@@ -12,6 +12,7 @@
 
 #include "rtos_tasks.h"
 #include "rtc_clock.h"     /* clock_serial_poll — time pushed over USB serial */
+#include "power.h"         /* g_boot_kind (quiet nap boot), g_power_deep_pending */
 #include "pico/flash.h"   /* flash_safe_execute_core_init — core-1 side of safe flash writes */
 #include "hardware/watchdog.h"   /* watchdog_reboot — hard-reboot escape hatch */
 #include "pico/time.h"           /* to_ms_since_boot — the UI idle clock */
@@ -135,6 +136,12 @@ bool ui_get_input(uint8_t *code, uint32_t timeout_ms) {
     return got;
 }
 
+/* Bench hook (serial "KEY x"): feed a press into the same queue the Input
+ * task uses, so a Greg on the bench can be driven without fingers. */
+void rtos_inject_input(uint8_t code) {
+    if (g_input_q) xQueueSend(g_input_q, &code, 0);
+}
+
 bool ui_idle_for(uint32_t ms) {
     return to_ms_since_boot(get_absolute_time()) - g_ui_last_input_ms >= ms;
 }
@@ -164,7 +171,13 @@ static void display_task(void *arg) {
      * exactly one core for the whole program (the bare-metal DEV_Module_Init in
      * main() set up the bus; we do the panel init/clear here, strictly before the
      * first blit). */
-    display_init_panel();               /* main.c: EPD_Init + EPD_Clear */
+    /* ...except on the quiet boot out of a deep-nap USB peek: the glass still
+     * holds the sleep still and Greg is staying asleep, so leave it be. The
+     * CENTER wake sends DISP_CMD_WAKE, which does the full init + clear. */
+    if (g_boot_kind != BOOT_NAP_PEEK)
+        display_init_panel();           /* main.c: EPD_Init + EPD_Clear */
+    else
+        display_park_panel();           /* keep the image; controller back to deep sleep */
 
     for (;;) {
         int idx;
@@ -299,7 +312,8 @@ static void input_task(void *arg) {
 static void hk_task(void *arg) {
     (void)arg;
     for (;;) {
-        hk_sample();                    /* main.c: read accel/orientation/steps, publish snapshot */
+        if (!g_power_deep_pending)      /* core power is about to go: stay off the I2C bus */
+            hk_sample();                /* main.c: read accel/orientation/steps, publish snapshot */
         vTaskDelay(pdMS_TO_TICKS(50));  /* ~20 Hz — steady, cyw43-lock-free so auto-rotate stays instant */
     }
 }
@@ -307,20 +321,22 @@ static void hk_task(void *arg) {
 /* ----------------------------------------------------------------------------
  *  Battery task (core 0, lowest prio) — the cyw43-locked VSYS/USB reads
  * ------------------------------------------------------------------------- */
-/*  Split OUT of Housekeeping on purpose: read_vsys_volts()/is_usb_powered()
- *  grab the cyw43 lock (GP29 is the shared CYW43 SPI clock / VBUS sense), so
+/*  Split OUT of Housekeeping on purpose: read_vsys_raw_volts() grabs the
+ *  cyw43 lock (GP29 is the shared CYW43 SPI clock), so
  *  under radio traffic a read blocks behind the radio's background task. Left in
  *  the 20 Hz HK loop that stall dropped the accel sampling rate and made auto-
  *  rotate sluggish (visible as: snappy for the ~8 s radio-settle window after a
  *  wake, then slow again once battery reads resumed). Here a stall only delays
- *  the gauge. batt_sample() self-gates to ~4 Hz internally; a 100 ms tick keeps
+ *  the gauge. batt_sample() self-gates to ~1 Hz internally; a 100 ms tick keeps
  *  that cadence tight while the task mostly early-returns and yields. */
 static void batt_task(void *arg) {
     (void)arg;
     for (;;) {
         batt_sample();                  /* main.c: VSYS/USB via cyw43-locked ADC -> g_batt_v/pct/on_usb */
-        clock_serial_poll();            /* USB "TIME ..." push from the flash tooling (may stall on stdio lock) */
-        clock_checkpoint();             /* clock survives brown-out / watchdog / crash reboots */
+        if (!g_power_deep_pending) {
+            clock_serial_poll();        /* USB "TIME ..." push from the flash tooling (may stall on stdio lock) */
+            clock_checkpoint();         /* clock survives brown-out / watchdog / crash reboots */
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

@@ -23,6 +23,7 @@
 
 #include "battery.h"
 #include "motion.h"            /* g_auto_rotate / g_manual_orient runtime mirrors */
+#include "power.h"             /* AWAKE_CLK_48MHZ — which load the battery offset is for */
 #include "rng.h"
 #include "rtc_compat.h"
 #include "wifi_config.h"       /* WIFI_PASS — first-boot seeded networks */
@@ -109,6 +110,7 @@ void saved_seed_defaults(void) {
     g_saved.last_ssid[0]    = '\0';
     g_saved.language        = LANG_EN;
     g_saved.filthy_quotes   = 1;      /* FILTHY edition ships filthy; ignored by the clean build */
+    g_saved.batt_model      = BATT_MODEL_48MHZ;
 }
 
 void saved_load(void) {
@@ -128,6 +130,23 @@ void saved_load(void) {
         g_saved.batt_offset_src = 'D';
     }
     if (g_saved.batt_offset_src != 'A' && g_saved.batt_offset_src != 'M') g_saved.batt_offset_src = 'D';
+    /* One-time migration. The offset is "the D3 drop at Greg's idle current",
+     * and the 48 MHz clock cut that current to roughly a third — so an offset
+     * anchored under the old firmware is now too big by the diode's change in
+     * forward drop (BATT_OFFSET_CLOCK_SHIFT_MV) and the gauge would read HIGH
+     * until the next anchor. Pull it down by that estimate now; a default
+     * offset simply takes the new default. The next auto/manual anchor makes
+     * it exact again. */
+    bool migrated = false;
+    if (AWAKE_CLK_48MHZ && g_saved.batt_model != BATT_MODEL_48MHZ) {
+        if (g_saved.batt_offset_src == 'D') {
+            g_saved.batt_offset_mv = BATT_OFFSET_DEFAULT_MV;
+        } else if (g_saved.batt_offset_mv >= BATT_OFFSET_MIN_MV + BATT_OFFSET_CLOCK_SHIFT_MV) {
+            g_saved.batt_offset_mv = (uint16_t)(g_saved.batt_offset_mv - BATT_OFFSET_CLOCK_SHIFT_MV);
+        }
+        g_saved.batt_model = BATT_MODEL_48MHZ;
+        migrated = true;
+    }
     battery_set_offset_mv(g_saved.batt_offset_mv, (char)g_saved.batt_offset_src);
     if (g_saved.wifi_mode > WIFI_MODE_ALWAYS) g_saved.wifi_mode = WIFI_MODE_SYNC_ONLY;
     if ((uint8_t)g_saved.last_ssid[0] == 0xFF) g_saved.last_ssid[0] = '\0';
@@ -150,6 +169,11 @@ void saved_load(void) {
     if (g_saved.manual_orient > 2) g_saved.manual_orient = OR_TALL;
     g_auto_rotate   = g_saved.auto_rotate ? true : false;
     g_manual_orient = g_saved.manual_orient;
+    if (migrated) {
+        printf("[BATT] offset migrated for the 48 MHz draw: now %u mV (%c)\n",
+               (unsigned)g_saved.batt_offset_mv, (char)g_saved.batt_offset_src);
+        saved_write_flash();
+    }
     printf("[social] this WetGreg: id=%04X name=\"%s\"\n",
            g_saved.wetgreg_id, wetgreg_display_name());
 }

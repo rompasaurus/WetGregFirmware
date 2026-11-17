@@ -33,6 +33,7 @@ extern float   mpu_temp_c;               /* unused on SC7A20 — held at 0 */
 
 void  mpu_init(void);
 void  mpu_read_all(void);
+void  mpu_power_down(void);   /* ODR off (~0.5 uA) — deep-nap entry */
 
 /* Conversions / derived values (raw counts → g, deg/s, degrees). */
 float accel_g(int16_t raw);

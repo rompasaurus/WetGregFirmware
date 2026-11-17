@@ -30,4 +30,9 @@
  * Call display_render() (rtos_tasks.h) afterwards to hand it to core 1. */
 void transpose_to_display(void);
 
+/* Deep-nap power-down path, straight after a reset with nothing initialised:
+ * bring up the panel pins + SPI and put the controller into deep sleep without
+ * touching the image. No stdio, no scheduler. */
+void display_park_cold(void);
+
 #endif /* DISPLAY_H */

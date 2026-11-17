@@ -79,10 +79,116 @@ reason the reading drifted between boards and sessions.
 5. **Menus time out** (`app_main.c`): 90 s without a press returns to the octopus
    screen (3 min on the password keyboard, 2 min on SCAN NEARBY), from where the
    5-minute stillness nap can happen. Previously a Greg left in a menu never slept.
-6. **Sleep state**: battery sampling 50× slower; optional `-DSLEEP_CYW43_OFF=ON`
-   powers the radio chip down entirely (GPIO 25 is held high so the VSYS divider
-   stays readable). Off by default until bench-tested — it takes the cyw43 arch and
-   BTstack through a deinit/init cycle on every nap.
+6. **Sleep state**: battery sampling 50× slower. (The optional `SLEEP_CYW43_OFF`
+   radio power-down from this round was never bench-tested and is superseded by the
+   round-2 deep nap below.)
+
+---
+
+## Round 2 (2026-11-16) — why it still only lasted a day
+
+Field report: _"still not getting accurate battery reporting, and the device barely
+lasts a day, two at the most."_ A unit that had been up for 20 h on the round-1
+firmware was put on USB serial and showed the cause directly.
+
+### What was actually wrong
+
+1. **The radio chip hangs, and the battery sampler then pins a core.** The log read
+   `[CYW43] STALL(0;130-130): timeout` once a second, forever. The CYW43 had stopped
+   granting bus credits, and the driver's reaction to that is a **one-second busy-wait
+   with the radio lock held** for every ioctl. The sampler issued an ioctl twice a
+   second (the VBUS pin), so core 0 was spinning flat out around the clock. A fresh
+   reboot of the same firmware shows no stall — it sets in during uptime, and nothing
+   ever cleared it.
+2. **The same hang broke USB detection, and with it the gauge.** With the ioctl
+   failing, USB read as "not present": on the charger the gauge treated the 4.43 V USB
+   rail as a cell (`raw 4.428 V + 530 mV → 4.96 V = 100%`), and the auto-anchor — which
+   needs to see USB arrive and leave — could never fire.
+3. **Probable origin of the hang: the radio's bus timing does not work at 48 MHz.**
+   The SDK's default PIO SPI program for the CYW43 (`spi_gap01_sample0`) is "for high
+   cpu speed". Booted at 48 MHz the chip does not start at all (`[CYW43] Failed to
+   start CYW43`, captured on the bench); with the SDK's low-speed variant
+   (`spi_gap0_sample1`) it starts and runs normally. Round 1's sleep state dropped to
+   48 MHz with the chip still live on the high-speed program.
+4. **Polling the chip kept it awake.** Even healthy, an ioctl every 500 ms never lets
+   the CYW43's bus go idle (the driver sleeps it after ~2.5 s of quiet).
+5. **Awake was simply expensive.** 150 MHz for an e-ink UI, and Greg is awake whenever
+   he is being carried (the accelerometer keeps him up for the pedometer).
+
+### What changed (verified on a unit over USB serial unless marked)
+
+| # | Change | Where |
+|---|---|---|
+| 1 | **Runs at 48 MHz all the time** off PLL_USB with PLL_SYS powered down, set first thing in `main()` so every baud rate and the RTOS tick size themselves from it. The clock is no longer switched under a live radio. | `power.c` `power_boot_begin` |
+| 2 | **Radio bus program for 48 MHz**: `CYW43_SPI_PROGRAM_NAME=spi_gap0_sample1`. | `CMakeLists.txt` |
+| 3 | **USB presence comes from the VSYS reading** (≥ 4.10 V is USB — a diode-fed cell tops out near 3.9 V; ≤ 4.00 V drops back), not from the radio's answer. | `battery.c` `battery_usb_from_raw` |
+| 4 | **Battery sampled every 10 s awake / 30 s napping instead of 2 Hz.** The read still needs one ioctl first (without a transaction the ADC sees ~0.03 V), so the cadence is what lets the radio chip sleep between samples. | `power.c`, `battery.c` |
+| 5 | **Radio health check**: that same ioctl's result is kept; three failed samples in a row → a **warm restart** (steps, mood and clock carried over, no splash) that re-initialises the chip. At most one automatic restart per cold boot. | `power.c` `radio_health_check`, `power_warm_restart` |
+| 6 | **Readings below 2.5 V are rejected** as failed reads — they can no longer flip the USB state or trip the critical-battery nap. | `power.c` `batt_sample` |
+| 7 | **Unattended redraws ÷ 4**: no press for 3 min while being carried → one panel refresh per quote (~12 s) instead of the four-frame mouth animation. Each refresh measures ~750 ms. _(not exercised on the bench)_ | `app_main.c` `STATE_OCTOPUS` |
+| 8 | **Gauge only falls on battery** (a rise must be ≥ 4 points and persist). _(not exercised: the bench unit was on USB throughout)_ | `power.c` `gauge_monotonic` |
+| 9 | **Offset re-based for the lower draw**: default 530 → 450 mV; an offset anchored under the old firmware is pulled down 80 mV once. An estimate — the next anchor makes it exact. | `battery.h`, `storage.c` |
+
+### Tried and backed out
+
+- **Lower core voltage (1.00 V).** The regulator setting survives a warm reset while the
+  boot ROM and C runtime start at 150 MHz; the next warm boot froze and could not even
+  enumerate in BOOTSEL. The rail now stays at the default and is restored at boot.
+- **Waking / sleeping the radio bus directly** instead of the ioctl: froze the firmware
+  (it ran against a radio that had failed to start). Removed.
+- **Deep nap** (power the RP2350's switched core off via POWMAN; CENTER or a timed
+  alarm wakes it; state carried in the POWMAN scratch registers and the always-on
+  timer). For most of the day this looked dead: the unit went down and came back on
+  neither CENTER nor the alarm, and needed a full power removal every time. With a
+  second Pico 2 W flashed as a debug probe on the SWD pads the cause turned out to be
+  our own error handling. The SDK's `powman_set_power_state()` polls for the
+  "waiting for the processors to sleep" flag for only ~500 loop iterations (a few
+  microseconds) and returns a TIMEOUT error while the request is still pending. The
+  firmware took that for a refusal, **disarmed both wake sources and cleared the nap
+  record — and then the chip powered down anyway**, with nothing left to wake it.
+  `deep_power_down()` now issues the request itself, waits properly, and withdraws the
+  request on a real refusal. Verified with the probe attached and the unit on USB:
+  power-down, self-wake on the alarm after 20 s and after 10 min (`slept 0h10m`, clock
+  carried through), classification as a quiet USB peek, and wake from there.
+  Also verified (2026-11-16 evening): a physical CENTER press wakes it (`last_pwrup=02`,
+  30 s into a nap, well before the alarm); and on battery the timed peek finds no USB
+  and powers straight back down (unplugged for 5 min, replugged: the unit stayed off
+  USB until its next 15-minute peek, then reported `slept 0h16m` as a quiet USB peek).
+  Note: `NAP DEEP <s>` sets only the first peek; later peeks use `DEEP_NAP_PEEK_S`.
+  **First overnight run (2026-11-16/17) was invalid — bench error.** The unit was
+  flashed over SWD and the debugger's power-up request was not cleared afterwards, so
+  POWMAN refused every power-down. The refusal path then cold-booted: chime, redraw,
+  doze off, refused, reboot — 128 boots in ~11 h (the gauge still showed 89 %). Fixed
+  in firmware: a refused power-down now reboots QUIETLY into the light nap
+  (`REFUSED_MAGIC`, logged as `[NAP] power-down REFUSED`) and retries one peek period
+  later. Bench rule: after any SWD flash, run `rp2350.dap dpreg 4 0` (or power-cycle
+  the probe/target) before a battery test. Units without a probe cannot hit this.
+  **Not yet verified: a multi-day run on battery and many nap/wake cycles in a row.**
+  Until then it stays behind `-DDEEP_NAP=ON`, off by default, and the shipped nap is
+  the light nap (radios and panel off, 48 MHz WFI).
+
+Build switches: `-DAWAKE_CLK_48MHZ=OFF`, `-DDEEP_NAP=ON` (experimental),
+`-DBOOT_TRACE=1` / `-DBOOT_LOG_DELAY_MS=<ms>` (bench: boot markers, and a pause so a
+serial monitor can attach). The old `SLEEP_CYW43_OFF` option is gone.
+
+### Bench commands (USB serial, 115200)
+
+| Command | Effect |
+|---|---|
+| `PWR?` | clocks, boot kind, USB verdict, gauge, offset |
+| `KEY U\|D\|L\|R\|C` | inject a joystick press |
+| `NAP` | doze off now |
+| `RESTART` | the warm restart the radio health check performs |
+| `NAP DEEP [s]` | experimental builds only: force the deep nap |
+
+Useful log lines: `[PWR] boot: …`, `[CYW43] radio did not answer (n/3)`,
+`[BATT] invalid VSYS read … — ignored`.
+
+### Still unknown
+
+No current has been measured. The expected gain is "a hung radio no longer spins a
+core, and awake runs at a third of the clock"; how many days that buys needs a
+multi-day run on battery, and the measurement table below is still empty.
 
 ---
 
@@ -100,8 +206,12 @@ reason the reading drifted between boards and sessions.
       awake viewed / awake idle (screen frozen) / asleep / social on / WiFi ALWAYS. Fill in the table below.
 - [ ] **AC10 (hardware):** gauge within ±5 % of a meter at 4.1 V, 3.8 V and 3.6 V after two auto-anchor cycles.
 - [ ] **AC11 (hardware):** a full charge lasts ≥ 3 days of normal (mixed) use.
-- [ ] **AC12 (hardware):** with `SLEEP_CYW43_OFF=ON`, 20 consecutive nap/wake cycles with social on + WiFi ALWAYS, no hang
-      (serial attached; the 5 s CENTER-hold watchdog reboot is the escape hatch).
+- [ ] **AC12 (hardware):** a Greg left awake for 24 h shows no `[CYW43] STALL` lines; if the radio does hang, the health
+      check restarts it within ~30 s.
+- [ ] **AC13 (hardware):** an overnight charge auto-anchors on unplug (USB is now detected from VSYS).
+- [ ] **AC14 (hardware):** deep nap (`-DDEEP_NAP=ON`): wakes on a physical CENTER press; on battery the timed USB peek goes
+      straight back down; 20 nap/wake cycles in a row. (Alarm wake, the USB-present peek, one CENTER wake and one
+      on-battery peek pass on the bench; the 20-cycle and multi-day runs are outstanding.)
 
 ### Measurement table (fill in)
 
@@ -111,8 +221,8 @@ reason the reading drifted between boards and sessions.
 | Awake, screen frozen (30 s no motion) | 6–9 | |
 | + social scanning (5 % profile) | +1.5–2.5 | |
 | + WiFi ALWAYS ON (PM1) | +2–3 | |
-| Asleep (default) | 2–4 | |
-| Asleep (`SLEEP_CYW43_OFF=ON`) | 1–2 | |
+| Nap (light: radios + panel off, 48 MHz) | 4–7 | |
+| Nap (deep, `-DDEEP_NAP=ON`) | ~0.3 | |
 
 ---
 
@@ -129,6 +239,6 @@ reason the reading drifted between boards and sessions.
 
 ## Notes / References
 - Hardware analysis + Rev 2 change list: `Dilder-PCB/Dilder Full PCB Rev 1/POWER_PATH_NOTES.md`
-- Build flags: `BATT_DIRECT_ADC_GPIO`, `BATT_DIRECT_DIVIDER`, `BATT_OFFSET_DEFAULT_MV`, `SLEEP_CYW43_OFF`
+- Build flags: `BATT_DIRECT_ADC_GPIO`, `BATT_DIRECT_DIVIDER`, `BATT_OFFSET_DEFAULT_MV`, `AWAKE_CLK_48MHZ`, `DEEP_NAP`, `DEEP_NAP_PEEK_S`
 - Serial diagnostics: `[BATT] raw … + …mV → … V = …%  left … h`, `[BATT] auto-anchor …`, `[WiFi] sync done — dropping the link`
 - Related: [Off-State Screen](../complete/Feature_OffStateScreen_Status-Complete.md) (sleep state), Issue #4 (power switch)

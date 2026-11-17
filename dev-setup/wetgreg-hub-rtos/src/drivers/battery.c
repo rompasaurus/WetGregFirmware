@@ -22,6 +22,9 @@ char     g_batt_offset_src = 'D';
 
 static bool battery_adc_ready = false;
 static volatile bool g_cyw43_up = true;   /* the arch is up unless power.c says otherwise */
+static volatile uint8_t g_radio_fails = 0; /* consecutive failed VBUS ioctls (radio not answering) */
+
+int battery_radio_fail_count(void) { return g_radio_fails; }
 
 #ifdef BATT_DIRECT_ADC_GPIO
   #define BATT_ADC_GPIO  BATT_DIRECT_ADC_GPIO
@@ -57,9 +60,21 @@ float read_vsys_raw_volts(void) {
     if (!battery_adc_ready) battery_init();
 
 #ifndef BATT_DIRECT_ADC_GPIO
-    /* GPIO 29 doubles as the CYW43 SPI clock — lock the radio out while we read. */
+    /* GPIO 29 doubles as the CYW43 SPI clock — lock the radio out while we read.
+     *
+     * The read only works straight after talking to the radio chip: without a
+     * transaction first the ADC sees ~0.03 V (measured; the SDK's own VSYS
+     * example does the same "make sure cyw43 is awake" ioctl). So ask the chip
+     * for its VBUS pin, exactly as this firmware always has — but now only
+     * once per sample at the slow cadence, and with the RESULT kept: a failed
+     * ioctl is the radio-health signal (battery_radio_fail_count). */
     bool lock = g_cyw43_up;
-    if (lock) cyw43_thread_enter();
+    if (lock) {
+        cyw43_thread_enter();
+        bool vbus = false;
+        if (cyw43_gpio_get(&cyw43_state, CYW43_WL_GPIO_VBUS_PIN, &vbus) == 0) g_radio_fails = 0;
+        else if (g_radio_fails < 255) g_radio_fails++;
+    }
     adc_gpio_init(BATT_ADC_GPIO);        /* reclaim the pin as an ADC input */
 #endif
     adc_select_input(BATT_ADC_INPUT);
@@ -72,6 +87,9 @@ float read_vsys_raw_volts(void) {
     uint16_t s[N];
     for (int i = 0; i < N; i++) s[i] = (uint16_t)adc_read();
 #ifndef BATT_DIRECT_ADC_GPIO
+    /* The driver puts the bus back to sleep by itself ~2.5 s after the last
+     * activity; sampling rarely (BATT_SAMPLE_MS_AWAKE) is what lets the chip
+     * spend most of its time asleep. */
     if (lock) cyw43_thread_exit();
 #endif
 
@@ -93,17 +111,20 @@ float read_vsys_raw_volts(void) {
 #endif
 }
 
-bool is_usb_powered(void) {
-    if (g_cyw43_up) {
-        /* VBUS sense is WL_GPIO2 on the CYW43 — authoritative while the chip is up. */
-        return cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN);
-    }
+bool battery_usb_from_raw(float raw_v) {
 #ifdef BATT_DIRECT_ADC_GPIO
-    return false;                        /* the direct path can't see VBUS; power.c
-                                          * re-checks once the radio is back */
+    (void)raw_v;                         /* the direct path measures the cell, not VSYS */
+    return g_cyw43_up ? cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN) : false;
 #else
-    return read_vsys_raw_volts() >= BATT_USB_VSYS_THRESHOLD_V;
+    static bool usb = false;
+    if (raw_v >= BATT_USB_VSYS_ON_V)       usb = true;
+    else if (raw_v <= BATT_USB_VSYS_OFF_V) usb = false;
+    return usb;
 #endif
+}
+
+bool is_usb_powered(void) {
+    return battery_usb_from_raw(read_vsys_raw_volts());
 }
 
 float battery_cell_from_raw(float raw_v) {
