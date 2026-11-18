@@ -33,3 +33,6 @@ __pycache__/
 *.swp
 *.swo
 *~
+
+# ─── Stray CMake configure at the repo root (VS Code CMake Tools) ───
+/build/
