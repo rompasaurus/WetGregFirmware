@@ -304,6 +304,7 @@ void batt_sample(void) {
          * out of a deep-nap peek, where the level at lights-out came with us. */
         pct_at_plug  = (was_usb == 0) ? last_bp
                      : (g_boot_kind == BOOT_NAP_PEEK && g_nap_resume.valid) ? g_nap_resume.pct : -1;
+        if (last_bp < 0) last_bp = pct_at_plug;   /* keep it readable on the periodic USB line */
         rate_reset();                         /* charging — discharge history is moot */
         batt_win_peak = 0.0f; batt_win_start = 0; batt_v_ema = 0.0f;
         printf("[BATT] USB in (cell was %d%%): anchor after >= %lu min on USB\n",
@@ -451,7 +452,10 @@ static void nap_state_save(int mood, uint32_t magic) {
     uint32_t now_s = clock_epoch_s();
     uint32_t age   = wifi_last_sync_age_s();
     int      pct   = g_batt_pct;            /* -1 while on USB */
-    if (g_boot_kind == BOOT_NAP_PEEK && g_nap_resume.valid && !g_usb_seen) pct = g_nap_resume.pct;
+    /* Going back down after a peek on battery: the fresh reading if it is the
+     * lower one (a napping cell only drains), else what came with us. */
+    if (g_boot_kind == BOOT_NAP_PEEK && g_nap_resume.valid && !g_usb_seen
+        && (pct < 0 || (g_nap_resume.pct >= 0 && g_nap_resume.pct < pct))) pct = g_nap_resume.pct;
     if (mood < -1 || mood > 126) mood = -1;
     if (pct  < -1 || pct  > 100) pct  = -1;
     powman_hw->scratch[NAP_S_STEPS]  = steps_today;
@@ -511,6 +515,50 @@ static inline void nap_powman_write(volatile uint32_t *reg, uint32_t value) {
  * Does not return. If POWMAN explicitly refuses (e.g. CENTER is down right
  * now, so a wake is already pending) the request is withdrawn and Greg
  * reboots into an ordinary cold boot. */
+/* The low-power oscillator that clocks the always-on timer through a nap is
+ * only good to about 1 % at its factory trim: a Greg that deep-napped for a
+ * day came back 13 minutes slow (bench, 2026-11-18). So before every
+ * power-down, time 400 of its millisecond ticks against the crystal and tell
+ * POWMAN the frequency it really has right now (this also follows
+ * temperature, since it is redone at every USB peek). Costs 0.4 s awake.
+ *
+ *
+ * What is left (bench, two chips, 8-minute naps): -0.58 % on one, between
+ * -0.16 % and +0.12 % on the other. It is an RC oscillator and its reading
+ * wanders by a few tenths of a percent from minute to minute (26 513..26 849
+ * Hz on one chip within half an hour), so one reading cannot do better.
+ * Tried and backed out: a fixed "runs slower asleep" factor (fitted one chip,
+ * made the other 0.49 % fast) and correcting the nap after the fact from a
+ * second reading taken at the wake (made a +0.12 % nap -0.19 %). A USB peek
+ * still takes that second reading, for the log only (PWR? -> NAPINFO). The
+ * WiFi time sync is what removes the remainder. */
+static uint32_t g_lposc_wake_hz    = 0;     /* LPOSC as measured at the last deep-nap wake */
+
+static uint32_t lposc_measure_hz(uint32_t ticks) {
+    /* Start from the factory figure if the chip has one (0 = none: keep what
+     * the registers hold, 32.768 kHz out of reset), then read back what the
+     * timer is actually dividing by - that is the figure the ticks we are
+     * about to count were made with. */
+    powman_timer_set_1khz_tick_source_lposc_with_hz(powman_timer_get_lposc_calib_freq());
+    if (!powman_timer_is_running()) powman_timer_start();
+    uint32_t nominal = (powman_hw->lposc_freq_khz_int & POWMAN_LPOSC_FREQ_KHZ_INT_BITS) * 1000u
+                     + ((powman_hw->lposc_freq_khz_frac & POWMAN_LPOSC_FREQ_KHZ_FRAC_BITS) * 1000u + 32768u) / 65536u;
+    if (nominal < 20000u || nominal > 50000u) return 0;                      /* 0 = leave the setting alone */
+
+    uint64_t m0 = powman_timer_get_ms(), t0 = time_us_64();
+    while (powman_timer_get_ms() == m0 && time_us_64() - t0 < 20000u) { }   /* line up on a tick edge */
+    m0 = powman_timer_get_ms();
+    t0 = time_us_64();
+    uint64_t m1 = m0;
+    while ((m1 = powman_timer_get_ms()) < m0 + ticks && time_us_64() - t0 < (ticks + 200u) * 1000u) { }
+    uint64_t dt = time_us_64() - t0;
+    if (m1 < m0 + ticks || dt == 0) return 0;                                /* timer not ticking: leave it */
+
+    uint64_t hz = (uint64_t)nominal * (m1 - m0) * 1000u / dt;
+    if (hz < (uint64_t)nominal * 9u / 10u || hz > (uint64_t)nominal * 11u / 10u) return 0;
+    return (uint32_t)hz;
+}
+
 static void __attribute__((noreturn)) deep_power_down(void) {
     (void)save_and_disable_interrupts();
     for (uint i = 0; i < NUM_IRQS; i++) irq_set_enabled(i, false);   /* nothing may end the WFI */
@@ -519,7 +567,11 @@ static void __attribute__((noreturn)) deep_power_down(void) {
      * on the SWD pads, attaching wakes a napping Greg — the only way back in
      * when no other wake source works (and harmless when no probe is fitted). */
     powman_set_debug_power_request_ignored(false);
-    powman_timer_set_1khz_tick_source_lposc();        /* XOSC is about to stop; LPOSC (factory-cal) keeps time */
+    /* XOSC is about to stop; LPOSC keeps time - trimmed against the crystal
+     * first (see lposc_measure_hz). */
+    uint32_t lposc_hz = lposc_measure_hz(400u);
+    powman_hw->scratch[7] = lposc_hz;                 /* for the wake log */
+    powman_timer_set_1khz_tick_source_lposc_with_hz(lposc_hz);
     if (!powman_timer_is_running()) powman_timer_start();
     hw_set_bits(&powman_hw->vreg_ctrl, POWMAN_PASSWORD_BITS | POWMAN_VREG_CTRL_UNLOCK_BITS);
 
@@ -533,8 +585,8 @@ static void __attribute__((noreturn)) deep_power_down(void) {
     if (powman_configure_wakeup_state(off, powman_get_power_state())) {
         powman_hw->boot[0] = 0; powman_hw->boot[1] = 0;   /* wake = a normal boot into main() */
         powman_hw->boot[2] = 0; powman_hw->boot[3] = 0;
-        powman_hw->scratch[6] = powman_hw->timer;         /* readback of what was armed, for the */
-        powman_hw->scratch[7] = powman_hw->pwrup[0];      /* wake snapshot (bench diagnostics) */
+        powman_hw->scratch[6] = (uint32_t)powman_timer_get_ms();   /* nap clock at lights-out (low word); */
+                                                                   /* scratch[7] = LPOSC Hz it runs on    */
 
         /* Request the power-down ourselves rather than through the SDK's
          * powman_set_power_state(). That helper polls for the "waiting for
@@ -685,6 +737,7 @@ static void nap_boot_classify(void) {
     g_boot_kind = peek ? BOOT_NAP_PEEK : BOOT_NAP_WAKE;
     nap_state_load();
     powman_hw->scratch[NAP_S_MAGIC] = 0;      /* consumed — a reset from here on is an ordinary boot */
+    if (peek) g_lposc_wake_hz = lposc_measure_hz(200u);   /* log only; nobody is waiting on a peek */
     powman_timer_set_1khz_tick_source_xosc(); /* awake again: the crystal keeps better time */
 }
 #endif /* HAVE_DEEP_NAP */
@@ -715,7 +768,7 @@ void power_boot_report(void) {
                (unsigned long)w[SNAP_NOW_HI], (unsigned long)w[SNAP_NOW_LO], (unsigned long)w[SNAP_ALARM_HI],
                (unsigned long)w[SNAP_ALARM_LO], (unsigned long)w[SNAP_INTR], (unsigned long)w[SNAP_VREG],
                (unsigned long)w[SNAP_SEQ_CFG]);
-        printf("[NAP] armed before power-down: timer=%08lx pwrup0=%08lx\n",
+        printf("[NAP] armed before power-down: timer=%08lx lposc=%lu Hz\n",
                (unsigned long)w[SNAP_PRE_TIMER], (unsigned long)w[SNAP_PRE_PWRUP0]);
     }
 #endif
@@ -886,8 +939,24 @@ bool power_debug_cmd(const char *line) {
                g_batt_pct, (double)g_batt_v, (double)g_batt_raw_v,
                (unsigned)g_batt_offset_mv, g_batt_offset_src, (int)g_batt_low, (int)g_batt_critical,
                (double)g_batt_hours_left, g_batt_hours_est ? "(est)" : "");
+#if HAVE_DEEP_NAP
+        if (g_wake_snap_valid)      /* what the nap clock was trimmed to, and what the cell read at lights-out */
+            printf("NAPINFO lposc before nap=%lu Hz at wake=%lu Hz factory=%lu Hz cell_at_nap=%d%%\n",
+                   (unsigned long)g_wake_snap[SNAP_PRE_PWRUP0], (unsigned long)g_lposc_wake_hz,
+                   (unsigned long)powman_timer_get_lposc_calib_freq(),
+                   g_nap_resume.valid ? (int)g_nap_resume.pct : -1);
+#endif
         return true;
     }
+#if HAVE_DEEP_NAP
+    if (strcmp(line, "LPOSC?") == 0) {        /* measure the nap oscillator now (0.4 s) */
+        uint32_t hz = lposc_measure_hz(400u);
+        powman_timer_set_1khz_tick_source_xosc();
+        printf("LPOSC %lu Hz now, up %lu s\n", (unsigned long)hz,
+               (unsigned long)(to_ms_since_boot(get_absolute_time()) / 1000u));
+        return true;
+    }
+#endif
     if (strncmp(line, "KEY ", 4) == 0) {
         uint8_t code = INPUT_NONE;
         switch (line[4]) {

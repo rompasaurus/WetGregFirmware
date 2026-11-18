@@ -163,6 +163,29 @@ firmware was put on USB serial and showed the cause directly.
   (`REFUSED_MAGIC`, logged as `[NAP] power-down REFUSED`) and retries one peek period
   later. Bench rule: after any SWD flash, run `rp2350.dap dpreg 4 0` (or power-cycle
   the probe/target) before a battery test. Units without a probe cannot hit this.
+  **Second run (2026-11-17/18, unit A025, no probe): ~24 h on battery, deep nap held
+  the whole time** (no reboots, woke itself on the USB peek, manual anchor kept). Two
+  defects found:
+  - *Clock lost 13 min in the day.* The always-on timer runs on the LPOSC through a
+    nap; this chip's factory figure is 32 660 Hz and its LPOSC measured 32 451..32 536 Hz
+    awake (-0.4..-0.6 %), slower again asleep. `lposc_measure_hz()` now times 400 timer ticks against the
+    crystal before every power-down and trims POWMAN to the result. The second unit
+    (Sweaty Moth, LPOSC ~26.6 kHz with a factory figure of 26 573) lost 6.5 min in
+    ~25 h untrimmed. What is left after the trim, over single 8-minute naps on USB:
+    -0.58 % on A025; -0.16 % and +0.12 % on Sweaty Moth. The LPOSC is an RC
+    oscillator whose reading wanders a few tenths of a percent within minutes
+    (26 513..26 849 Hz in half an hour), so one reading cannot do better.
+    Tried and backed out: a fixed "slower asleep" factor (-4800 ppm fitted A025 to
+    0.01 %, made Sweaty Moth 0.49 % fast) and correcting the nap afterwards from a
+    second reading at the wake (turned a +0.12 % nap into -0.19 %).
+    Expect a few minutes a day at worst; a full day of 15-minute peeks re-trims 96
+    times and should average better than a single nap, but that is unmeasured. The
+    WiFi time sync removes the rest. Bench: `LPOSC?` measures the oscillator now.
+  - *The battery % at lights-out could not be read after the wake* (printed only in
+    the boot banner). `PWR?` now adds a `NAPINFO lposc before nap=… at wake=… cell_at_nap=…%` line, an
+    on-battery peek refreshes the stored % with its own reading, and the periodic
+    `[BATT] USB rail … last on-battery …` line carries it.
+  The % for this run was therefore lost; AC11 is still open.
   **Not yet verified: a multi-day run on battery and many nap/wake cycles in a row.**
   Until then it stays behind `-DDEEP_NAP=ON`, off by default, and the shipped nap is
   the light nap (radios and panel off, 48 MHz WFI).
